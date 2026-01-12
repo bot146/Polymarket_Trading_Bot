@@ -25,6 +25,10 @@ GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 # This can be overridden via MARKET_FETCH_LIMIT environment variable
 DEFAULT_FETCH_LIMIT = 10000
 
+# Threshold for warning when fetched markets approach the limit
+# If we fetch within this many markets of the limit, warn the user
+LIMIT_WARNING_THRESHOLD = 10
+
 
 @dataclass(frozen=True)
 class MarketInfo:
@@ -118,7 +122,7 @@ class MarketScanner:
                 f"Fetched {len(markets)} markets from Gamma API "
                 f"(requested_limit={fetch_limit}, active_only={active_only}, parse_errors={parse_errors})"
             )
-            if len(markets) >= fetch_limit - 10:
+            if len(markets) >= fetch_limit - LIMIT_WARNING_THRESHOLD:
                 log.warning(
                     f"Retrieved {len(markets)} markets, close to limit of {fetch_limit}. "
                     "There may be more markets available. Consider increasing MARKET_FETCH_LIMIT if needed."

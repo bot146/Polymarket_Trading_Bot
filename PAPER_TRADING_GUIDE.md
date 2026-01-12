@@ -78,7 +78,7 @@ The bot is configured to scan all available markets by default:
 
 ```bash
 # .env file
-MARKET_FETCH_LIMIT=10000    # Very high limit (API may have lower cap)
+MARKET_FETCH_LIMIT=10000    # Very high limit (0 = use DEFAULT_FETCH_LIMIT, API may have lower cap)
 MIN_MARKET_VOLUME=5000      # Minimum volume filter (in USDC)
 ```
 
@@ -232,7 +232,7 @@ Run paper trading for **24-48 hours** minimum. Look for:
 
 Before going live, you should see:
 
-- **Actual ROI > 3%** (after accounting for slippage)
+- **Actual ROI > 3%** (after accounting for slippage) - This threshold is based on typical trading fees (~0.5-1%) and provides a reasonable buffer for profitability. Lower thresholds may not cover all costs; higher thresholds reduce trade frequency.
 - **Multiple successful trades** per day
 - **Positions resolving correctly** when markets complete
 - **Comprehensive market scanning** (1000+ markets)

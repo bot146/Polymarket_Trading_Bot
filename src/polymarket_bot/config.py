@@ -38,7 +38,7 @@ class Settings:
     cloudflare_block_cooldown_seconds: int = 600
     
     # Market scanning settings
-    market_fetch_limit: int = 10000  # Max markets to fetch from API (0 = unlimited within API constraints)
+    market_fetch_limit: int = 10000  # Max markets to fetch from API (0 = use DEFAULT_FETCH_LIMIT)
     min_market_volume: Decimal = Decimal("5000")  # Minimum volume threshold in USDC
 
 
