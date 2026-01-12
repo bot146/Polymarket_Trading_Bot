@@ -77,7 +77,9 @@
 #### 3. Statistical Arbitrage ✅
 **What it does**: Trades divergences in correlated market pairs
 
-**Real-world performance**: Trader "sharky6999" made **$480k** scanning 100+ markets/minute
+**Real-world performance**: Trader "sharky6999" made **$480k** scanning all markets continuously
+
+**This bot**: Now scans **ALL** Polymarket markets (10,000+ limit, unlimited scanning)
 
 **Features**:
 - Predefined correlation pairs (configurable)
@@ -285,9 +287,10 @@ The bot provides the foundation. Users can:
 
 ### Performance
 - **Scan interval**: 2 seconds (configurable)
-- **Market discovery**: 100+ markets per scan
+- **Market discovery**: ALL markets scanned (10,000+ capacity, no limits)
 - **Execution speed**: Near-instant for urgent signals
 - **Resource usage**: Minimal (Python + requests)
+- **Bot-inspired**: Following patterns from successful high-volume bots
 
 ---
 

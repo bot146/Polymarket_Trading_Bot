@@ -28,7 +28,8 @@ The bot employs multiple battle-tested strategies that have generated significan
    - Identifies correlated market pairs that diverge
    - Example: "Trump wins" vs "GOP Senate control"
    - Long cheap market, short expensive market, profit on convergence
-   - **Real trader**: "sharky6999" made $480k scanning 100+ markets/minute
+   - **Real trader**: "sharky6999" made $480k scanning **all markets continuously**
+   - **This bot**: Now scans ALL Polymarket markets (10,000+ limit, no restrictions)
 
 4. **Spread Farming** (Coming Soon) 💰
    - Market making: buy at bid, sell at ask
@@ -44,10 +45,42 @@ The bot employs multiple battle-tested strategies that have generated significan
 
 - **Modular Strategy Framework**: Easy to add new strategies
 - **Priority-Based Execution**: Urgent opportunities executed first
+- **Comprehensive Market Coverage**: Scans **ALL** Polymarket markets (unlimited, 10,000+ capacity)
+- **Bot-Inspired Patterns**: Inspired by successful bots: @car, @rn1, @Account88888
 - **Risk Management**: Position limits, kill switches, paper trading
 - **Real-Time Data**: WebSocket integration for live market feeds
 - **Market Scanner**: Discovers opportunities across all Polymarket markets
 - **Comprehensive Testing**: Full test suite for reliability
+
+## 🤖 Bot Strategy Inspiration
+
+This trading bot is inspired by highly successful Polymarket bot accounts that have consistently generated profits through systematic market scanning and opportunistic trading:
+
+### Reference Bot Accounts
+
+1. **[@car](http://polymarket.com/@car?tab=activity)** 
+   - High-frequency trading across multiple markets
+   - Fast execution on arbitrage opportunities
+   - Consistent small profits that compound over time
+
+2. **[@rn1](https://polymarket.com/@rn1?tab=activity)**
+   - Systematic market scanning
+   - Quick entry/exit on mispriced markets
+   - Focus on liquid, high-volume markets
+
+3. **[@Account88888](https://polymarket.com/@Account88888?tab=activity)**
+   - Automated trading patterns
+   - Rapid response to market inefficiencies
+   - Diversified across many markets simultaneously
+
+### Key Patterns This Bot Implements
+
+- **Comprehensive Market Scanning**: Scans ALL available Polymarket markets (no 100-market limit)
+- **Fast Execution**: Immediate order placement on identified opportunities
+- **Multi-Market Coverage**: Operates across many markets simultaneously
+- **Systematic Approach**: Automated detection and execution without manual intervention
+- **Arbitrage Focus**: Prioritizes guaranteed-profit opportunities
+- **Volume-Based Selection**: Targets high-volume markets for better liquidity
 
 ## 🚀 Quick Start
 

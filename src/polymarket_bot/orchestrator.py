@@ -144,7 +144,7 @@ class StrategyOrchestrator:
             if self.config.scan_high_volume:
                 high_vol_markets = self.scanner.get_high_volume_markets(
                     min_volume=self.config.min_volume,
-                    limit=100
+                    limit=None  # Scan all markets above volume threshold
                 )
                 
                 # Convert to dict format for strategies
@@ -169,7 +169,7 @@ class StrategyOrchestrator:
             
             # Scan resolved markets for guaranteed wins
             if self.config.scan_resolved:
-                resolved_markets = self.scanner.get_resolved_markets(limit=50)
+                resolved_markets = self.scanner.get_resolved_markets(limit=None)  # Scan all resolved markets
                 
                 for market in resolved_markets:
                     market_dict = {

@@ -43,7 +43,7 @@ The bot was encountering a WebSocket error: `'list' object has no attribute 'get
 - `clob_http_timeout_seconds` (20s)
 - `clob_connect_timeout_seconds` (10s)  
 - `cloudflare_block_cooldown_seconds` (600s)
-- Plus full suite of mirror trading configs for future use
+- Clean, focused configuration for trading strategies
 
 **Impact**: Single source of truth for all bot behavior
 

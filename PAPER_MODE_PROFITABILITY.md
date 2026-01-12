@@ -182,10 +182,11 @@ This simulates several trades and shows how profitability is tracked and reporte
 - Review individual trades for patterns
 
 ### "Very few opportunities"
-- Increase `limit` in scanner (default 100)
-- Lower `min_volume` threshold
-- Enable more strategies
+- Scanner now fetches ALL markets (no limit) - check if markets are being filtered out
+- Lower `min_volume` threshold in orchestrator config
+- Enable more strategies (arbitrage, guaranteed_win, stat_arb)
 - Run during high-activity times (US market hours)
+- Verify network connectivity to Polymarket APIs
 
 ## Conclusion
 
