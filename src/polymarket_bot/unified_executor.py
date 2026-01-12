@@ -1,7 +1,7 @@
 """Enhanced unified executor for multi-strategy trading.
 
 This module handles execution of trading signals from multiple strategies
-with proper validation, risk management, and error handling.
+with proper validation, risk management, error handling, and position tracking.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import OrderArgs
 
 from polymarket_bot.config import Settings, is_live
+from polymarket_bot.position_manager import PositionManager
 from polymarket_bot.strategy import Strategy, StrategySignal
 
 log = logging.getLogger(__name__)
@@ -26,20 +27,27 @@ class ExecutionResult:
     reason: str
     signal: StrategySignal
     order_ids: list[str] | None = None
+    position_ids: list[str] | None = None  # Track opened positions
     error: str | None = None
 
 
 class UnifiedExecutor:
     """Unified executor for all trading strategies."""
 
-    def __init__(self, client: ClobClient | None, settings: Settings):
+    def __init__(
+        self,
+        client: ClobClient | None,
+        settings: Settings,
+        position_manager: PositionManager | None = None,
+    ):
         self.client = client
         self.settings = settings
+        self.position_manager = position_manager
         self.execution_count = 0
         self.success_count = 0
         self.failure_count = 0
         
-        # Paper trading profitability tracking
+        # Paper trading profitability tracking (expected/theoretical)
         self.paper_total_profit = Decimal("0")
         self.paper_total_cost = Decimal("0")
         self.paper_trades_by_strategy: dict[str, dict] = {}
@@ -95,7 +103,7 @@ class UnifiedExecutor:
         confidence = signal.opportunity.confidence
         cost = signal.max_total_cost
         
-        # Track profitability
+        # Track profitability (theoretical expected profit)
         self.paper_total_profit += profit
         self.paper_total_cost += cost
         
@@ -111,6 +119,30 @@ class UnifiedExecutor:
         self.paper_trades_by_strategy[strategy_type]["total_profit"] += profit
         self.paper_trades_by_strategy[strategy_type]["total_cost"] += cost
         
+        # Open positions if position manager is available
+        position_ids = []
+        if self.position_manager:
+            condition_id = signal.opportunity.metadata.get("condition_id", "unknown")
+            for trade in signal.trades:
+                if trade.side == "BUY":
+                    # Determine outcome from metadata or token
+                    outcome = signal.opportunity.metadata.get("outcome", "UNKNOWN")
+                    if "yes_token_id" in signal.opportunity.metadata and trade.token_id == signal.opportunity.metadata["yes_token_id"]:
+                        outcome = "YES"
+                    elif "no_token_id" in signal.opportunity.metadata and trade.token_id == signal.opportunity.metadata["no_token_id"]:
+                        outcome = "NO"
+                    
+                    position = self.position_manager.open_position(
+                        condition_id=condition_id,
+                        token_id=trade.token_id,
+                        outcome=outcome,
+                        strategy=strategy_type,
+                        entry_price=trade.price,
+                        quantity=trade.size,
+                        metadata=signal.opportunity.metadata,
+                    )
+                    position_ids.append(position.position_id)
+        
         log.warning(
             f"📄 PAPER TRADE [{strategy_type}]: "
             f"profit=${profit:.4f} cost=${cost:.2f} confidence={confidence:.2%} "
@@ -123,17 +155,27 @@ class UnifiedExecutor:
                 f"token={trade.token_id[:8]}... type={trade.order_type}"
             )
         
-        # Show running total
+        # Show running total (theoretical)
         roi = (self.paper_total_profit / self.paper_total_cost * 100) if self.paper_total_cost > 0 else Decimal("0")
         log.info(
-            f"  💰 Running Total: profit=${self.paper_total_profit:.4f} "
-            f"cost=${self.paper_total_cost:.2f} ROI={roi:.2f}%"
+            f"  💰 Expected Profit Total: profit=${self.paper_total_profit:.4f} "
+            f"cost=${self.paper_total_cost:.2f} ROI={roi:.2f}% (theoretical)"
         )
+        
+        # Show actual portfolio P&L if position manager available
+        if self.position_manager:
+            portfolio_stats = self.position_manager.get_portfolio_stats()
+            log.info(
+                f"  💼 Actual Portfolio: realized=${portfolio_stats['total_realized_pnl']:.4f} "
+                f"unrealized=${portfolio_stats['total_unrealized_pnl']:.4f} "
+                f"total=${portfolio_stats['total_pnl']:.4f}"
+            )
         
         return ExecutionResult(
             success=True,
             reason="paper_mode_simulated",
             signal=signal,
+            position_ids=position_ids if position_ids else None,
         )
 
     def _live_trade(self, signal: StrategySignal) -> ExecutionResult:
@@ -147,6 +189,9 @@ class UnifiedExecutor:
             )
 
         order_ids = []
+        position_ids = []
+        strategy_type = signal.opportunity.strategy_type.value
+        condition_id = signal.opportunity.metadata.get("condition_id", "unknown")
         
         try:
             for trade in signal.trades:
@@ -173,6 +218,26 @@ class UnifiedExecutor:
                     f"✅ LIVE ORDER: {trade.side} {trade.size:.2f} @ ${trade.price:.4f} "
                     f"order_id={order_id}"
                 )
+                
+                # Track position if buy order and position manager available
+                if trade.side == "BUY" and self.position_manager:
+                    outcome = signal.opportunity.metadata.get("outcome", "UNKNOWN")
+                    if "yes_token_id" in signal.opportunity.metadata and trade.token_id == signal.opportunity.metadata["yes_token_id"]:
+                        outcome = "YES"
+                    elif "no_token_id" in signal.opportunity.metadata and trade.token_id == signal.opportunity.metadata["no_token_id"]:
+                        outcome = "NO"
+                    
+                    position = self.position_manager.open_position(
+                        condition_id=condition_id,
+                        token_id=trade.token_id,
+                        outcome=outcome,
+                        strategy=strategy_type,
+                        entry_price=trade.price,
+                        quantity=trade.size,
+                        entry_order_id=order_id,
+                        metadata=signal.opportunity.metadata,
+                    )
+                    position_ids.append(position.position_id)
             
             self.success_count += 1
             
@@ -181,6 +246,7 @@ class UnifiedExecutor:
                 reason="live_executed",
                 signal=signal,
                 order_ids=order_ids,
+                position_ids=position_ids if position_ids else None,
             )
             
         except Exception as e:
@@ -210,7 +276,7 @@ class UnifiedExecutor:
             return None
 
     def get_stats(self) -> dict:
-        """Get executor statistics including profitability."""
+        """Get executor statistics including profitability and portfolio."""
         stats = {
             "total_executions": self.execution_count,
             "successful": self.success_count,
@@ -228,4 +294,10 @@ class UnifiedExecutor:
                 for strategy, data in self.paper_trades_by_strategy.items()
             },
         }
+        
+        # Add portfolio stats if position manager available
+        if self.position_manager:
+            portfolio_stats = self.position_manager.get_portfolio_stats()
+            stats["portfolio"] = portfolio_stats
+        
         return stats
