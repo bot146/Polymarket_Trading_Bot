@@ -13,7 +13,9 @@ dependencies = [
   "websocket-client>=1.7.0",
   "tenacity>=8.2.3",
   "rich>=13.7.0",
-  "py-clob-client>=0.17.0"
+  "py-clob-client>=0.17.0",
+  "httpx>=0.24.0",
+  "eth-account>=0.8.0"
 ]
 
 [build-system]
