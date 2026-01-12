@@ -65,21 +65,6 @@ class PolymarketClient:
 
             if configured_funder:
                 funder = configured_funder
-            else:
-                proxy_addr = (getattr(Config, "MIRROR_PROXY_ADDRESS", "") or "").strip()
-                mirror_addr = (getattr(Config, "MIRROR_ACCOUNT_ADDRESS", "") or "").strip()
-
-                # Prefer explicit proxy var.
-                if proxy_addr:
-                    funder = proxy_addr
-                    if signature_type is None:
-                        signature_type = 1  # POLY_PROXY
-                # Back-compat: if the configured address differs from derived signer,
-                # assume the configured address is the funded proxy/profile wallet.
-                elif mirror_addr and derived_signer and mirror_addr.lower() != derived_signer.lower():
-                    funder = mirror_addr
-                    if signature_type is None:
-                        signature_type = 1  # POLY_PROXY
 
             # Initialize authenticated client for trading
             self.client = ClobClient(
@@ -104,7 +89,7 @@ class PolymarketClient:
                 self.client.set_api_creds(api_creds)
                 self.has_valid_creds = True
                 logger.info("Successfully initialized Polymarket client with API credentials")
-                logger.info("   You can now monitor target account trades and execute mirror trades")
+                logger.info("   You can now execute trades on Polymarket")
             except Exception as e:
                 logger.error("=" * 60)
                 logger.error("CRITICAL: Failed to create API credentials")
@@ -171,11 +156,11 @@ class PolymarketClient:
             if not hasattr(self.client, 'creds') or self.client.creds is None:
                 logger.error(
                     "Cannot fetch trades: API credentials are not set up. "
-                    "Please ensure your MIRROR_ACCOUNT_PRIVATE_KEY is correctly configured in .env"
+                    "Please ensure your POLY_PRIVATE_KEY is correctly configured in .env"
                 )
                 logger.error(
-                    "To monitor a target account's trades, you MUST have valid API credentials "
-                    "from your mirror account. The Polymarket API requires Level 2 authentication."
+                    "To fetch account trades, you MUST have valid API credentials. "
+                    "The Polymarket API requires Level 2 authentication."
                 )
                 return []
             

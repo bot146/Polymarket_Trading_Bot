@@ -68,19 +68,23 @@ class MarketScanner:
             log.error(f"Request failed for {endpoint}: {e}")
             raise
 
-    def get_all_markets(self, limit: int = 100, active_only: bool = True) -> list[MarketInfo]:
+    def get_all_markets(self, limit: int | None = None, active_only: bool = True) -> list[MarketInfo]:
         """Fetch all markets from Gamma API.
         
         Args:
-            limit: Maximum number of markets to fetch.
+            limit: Maximum number of markets to fetch. If None, fetches all available markets.
             active_only: If True, only return active (non-closed) markets.
             
         Returns:
             List of MarketInfo objects.
         """
         try:
+            # Default to fetching a large number if no limit specified
+            # Polymarket typically has 1000-3000 active markets
+            fetch_limit = limit if limit is not None else 10000
+            
             # Gamma API endpoint for markets
-            response = self._get("/markets", params={"limit": limit, "active": active_only})
+            response = self._get("/markets", params={"limit": fetch_limit, "active": active_only})
             
             markets = []
             for market_data in response:
@@ -90,7 +94,7 @@ class MarketScanner:
                     log.warning(f"Failed to parse market: {e}")
                     continue
                     
-            log.info(f"Fetched {len(markets)} markets from Gamma API")
+            log.info(f"Fetched {len(markets)} markets from Gamma API (limit={fetch_limit})")
             return markets
             
         except Exception as e:
@@ -109,7 +113,7 @@ class MarketScanner:
     def get_high_volume_markets(
         self,
         min_volume: Decimal = Decimal("10000"),
-        limit: int = 50
+        limit: int | None = None
     ) -> list[MarketInfo]:
         """Get high-volume markets suitable for arbitrage.
         
@@ -117,21 +121,36 @@ class MarketScanner:
         - More liquidity
         - Tighter spreads
         - Less slippage risk
+        
+        Args:
+            min_volume: Minimum volume threshold
+            limit: Maximum number of markets to return after filtering (None = all)
         """
-        markets = self.get_all_markets(limit=limit)
+        markets = self.get_all_markets(limit=None)  # Fetch all markets first
         high_volume = [m for m in markets if m.volume >= min_volume and m.active]
         high_volume.sort(key=lambda m: m.volume, reverse=True)
+        
+        # Apply limit after filtering if specified
+        if limit is not None:
+            high_volume = high_volume[:limit]
+            
         return high_volume
 
-    def get_resolved_markets(self, limit: int = 100) -> list[MarketInfo]:
+    def get_resolved_markets(self, limit: int | None = None) -> list[MarketInfo]:
         """Get recently resolved markets.
         
         Useful for detecting guaranteed win opportunities where
         winning shares still trade below $1.
+        
+        Args:
+            limit: Maximum number of markets to fetch. If None, fetches all available.
         """
         try:
+            # Default to fetching a large number if no limit specified
+            fetch_limit = limit if limit is not None else 10000
+            
             # Look for closed/resolved markets
-            response = self._get("/markets", params={"limit": limit, "closed": True})
+            response = self._get("/markets", params={"limit": fetch_limit, "closed": True})
             
             markets = []
             for market_data in response:
@@ -142,22 +161,31 @@ class MarketScanner:
                 except Exception:
                     continue
                     
-            log.info(f"Found {len(markets)} resolved markets")
+            log.info(f"Found {len(markets)} resolved markets (limit={fetch_limit})")
             return markets
             
         except Exception as e:
             log.error(f"Failed to fetch resolved markets: {e}")
             return []
 
-    def get_crypto_markets(self, limit: int = 50) -> list[MarketInfo]:
-        """Get crypto-related markets (fast-moving, good for arbitrage)."""
-        markets = self.get_all_markets(limit=limit)
+    def get_crypto_markets(self, limit: int | None = None) -> list[MarketInfo]:
+        """Get crypto-related markets (fast-moving, good for arbitrage).
+        
+        Args:
+            limit: Maximum number of markets to return. If None, returns all matching markets.
+        """
+        markets = self.get_all_markets(limit=None)  # Fetch all markets first
         # Simple keyword filter - could be made more sophisticated
         crypto_keywords = ["btc", "bitcoin", "eth", "ethereum", "crypto", "sol", "solana"]
         crypto_markets = [
             m for m in markets
             if any(kw in m.question.lower() for kw in crypto_keywords)
         ]
+        
+        # Apply limit if specified
+        if limit is not None:
+            crypto_markets = crypto_markets[:limit]
+            
         return crypto_markets
 
     def _parse_market(self, data: dict[str, Any]) -> MarketInfo:
@@ -191,7 +219,7 @@ class MarketScanner:
         """Refresh the market cache."""
         now = time.time()
         if force or (now - self._last_refresh) > self._refresh_interval:
-            markets = self.get_all_markets(limit=200)
+            markets = self.get_all_markets(limit=None)  # Fetch all markets for cache
             self._markets_cache = {m.condition_id: m for m in markets}
             self._last_refresh = now
             log.info(f"Market cache refreshed with {len(self._markets_cache)} markets")
