@@ -7,7 +7,7 @@ and executes them safely with proper risk management.
 from __future__ import annotations
 
 import logging
-import signal
+import signal as sig
 import sys
 import time
 from decimal import Decimal
@@ -75,8 +75,8 @@ def main() -> None:
     log.info(f"Min Edge: {settings.min_edge_cents}¢")
     
     # Register signal handlers for graceful shutdown
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    sig.signal(sig.SIGINT, signal_handler)
+    sig.signal(sig.SIGTERM, signal_handler)
     
     # Initialize CLOB client
     client = None
