@@ -22,7 +22,12 @@ GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 # Default limit for fetching markets when no specific limit is provided
 # Set high to capture all markets - Polymarket typically has 1000-3000 active markets
 # but we set a higher limit to ensure we don't miss any markets as the platform grows
+# This can be overridden via MARKET_FETCH_LIMIT environment variable
 DEFAULT_FETCH_LIMIT = 10000
+
+# Threshold for warning when fetched markets approach the limit
+# If we fetch within this many markets of the limit, warn the user
+LIMIT_WARNING_THRESHOLD = 10
 
 
 @dataclass(frozen=True)
@@ -52,8 +57,15 @@ class TokenInfo:
 class MarketScanner:
     """Scans Polymarket for trading opportunities."""
 
-    def __init__(self, api_base: str = GAMMA_API_BASE):
+    def __init__(self, api_base: str = GAMMA_API_BASE, fetch_limit: int | None = None):
+        """Initialize the market scanner.
+        
+        Args:
+            api_base: Base URL for the Gamma API
+            fetch_limit: Maximum number of markets to fetch (None = use DEFAULT_FETCH_LIMIT)
+        """
         self.api_base = api_base
+        self.fetch_limit = fetch_limit if fetch_limit is not None else DEFAULT_FETCH_LIMIT
         self._markets_cache: dict[str, MarketInfo] = {}
         self._last_refresh = 0.0
         self._refresh_interval = 60.0  # Cache for 60 seconds
@@ -77,29 +89,45 @@ class MarketScanner:
         """Fetch all markets from Gamma API.
         
         Args:
-            limit: Maximum number of markets to fetch. If None, fetches all available markets
-                   up to DEFAULT_FETCH_LIMIT.
+            limit: Maximum number of markets to fetch. If None, uses the scanner's configured
+                   fetch_limit (set in __init__ or DEFAULT_FETCH_LIMIT).
             active_only: If True, only return active (non-closed) markets.
             
         Returns:
             List of MarketInfo objects.
         """
         try:
-            # Use provided limit or default to fetching all markets
-            fetch_limit = limit if limit is not None else DEFAULT_FETCH_LIMIT
+            # Use provided limit, scanner's fetch_limit, or default
+            fetch_limit = limit if limit is not None else self.fetch_limit
+            
+            # Special handling: 0 means unlimited (within API constraints)
+            if fetch_limit == 0:
+                fetch_limit = DEFAULT_FETCH_LIMIT
             
             # Gamma API endpoint for markets
             response = self._get("/markets", params={"limit": fetch_limit, "active": active_only})
             
             markets = []
+            parse_errors = 0
             for market_data in response:
                 try:
                     markets.append(self._parse_market(market_data))
                 except Exception as e:
-                    log.warning(f"Failed to parse market: {e}")
+                    parse_errors += 1
+                    log.debug(f"Failed to parse market: {e}")
                     continue
-                    
-            log.info(f"Fetched {len(markets)} markets from Gamma API (limit={fetch_limit})")
+            
+            # Log comprehensive stats
+            log.info(
+                f"Fetched {len(markets)} markets from Gamma API "
+                f"(requested_limit={fetch_limit}, active_only={active_only}, parse_errors={parse_errors})"
+            )
+            if len(markets) >= fetch_limit - LIMIT_WARNING_THRESHOLD:
+                log.warning(
+                    f"Retrieved {len(markets)} markets, close to limit of {fetch_limit}. "
+                    "There may be more markets available. Consider increasing MARKET_FETCH_LIMIT if needed."
+                )
+            
             return markets
             
         except Exception as e:
@@ -134,6 +162,12 @@ class MarketScanner:
         markets = self.get_all_markets(limit=None)  # Fetch all markets first
         high_volume = [m for m in markets if m.volume >= min_volume and m.active]
         high_volume.sort(key=lambda m: m.volume, reverse=True)
+        
+        # Log filtering stats
+        log.info(
+            f"High-volume market filter: {len(markets)} total markets -> "
+            f"{len(high_volume)} markets with volume >= ${min_volume:,.0f}"
+        )
         
         # Apply limit after filtering if specified
         if limit is not None:

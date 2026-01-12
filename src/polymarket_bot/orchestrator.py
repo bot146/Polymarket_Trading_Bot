@@ -33,7 +33,7 @@ class OrchestratorConfig:
     # Market scanning
     scan_high_volume: bool = True
     scan_resolved: bool = True
-    min_volume: Decimal = Decimal("5000")
+    # min_volume will be taken from Settings.min_market_volume
     
     def __post_init__(self):
         """Validate configuration values."""
@@ -41,8 +41,6 @@ class OrchestratorConfig:
             raise ValueError("scan_interval must be positive")
         if self.max_concurrent_trades < 0:
             raise ValueError("max_concurrent_trades must be non-negative")
-        if self.min_volume <= 0:
-            raise ValueError("min_volume must be positive")
 
 
 class StrategyOrchestrator:
@@ -52,8 +50,8 @@ class StrategyOrchestrator:
         self.settings = settings
         self.config = config or OrchestratorConfig()
         
-        # Initialize components
-        self.scanner = MarketScanner()
+        # Initialize components with settings
+        self.scanner = MarketScanner(fetch_limit=settings.market_fetch_limit)
         self.registry = StrategyRegistry()
         
         # Initialize strategies
@@ -143,7 +141,7 @@ class StrategyOrchestrator:
             # Scan high-volume active markets
             if self.config.scan_high_volume:
                 high_vol_markets = self.scanner.get_high_volume_markets(
-                    min_volume=self.config.min_volume,
+                    min_volume=self.settings.min_market_volume,  # Use settings
                     limit=None  # Scan all markets above volume threshold
                 )
                 
