@@ -119,15 +119,29 @@ class MarketWssClient:
             if isinstance(bids, list) and bids:
                 # Each level often like [price, size] or {price, size}
                 top = bids[0]
-                price = top[0] if isinstance(top, list) else top.get("price")
+                price = None
+                if isinstance(top, list):
+                    price = top[0] if len(top) > 0 else None
+                elif isinstance(top, dict):
+                    price = top.get("price")
                 if price is not None:
-                    self.best_bid[str(asset_id)] = float(price)
+                    try:
+                        self.best_bid[str(asset_id)] = float(price)
+                    except (ValueError, TypeError):
+                        pass
 
             if isinstance(asks, list) and asks:
                 top = asks[0]
-                price = top[0] if isinstance(top, list) else top.get("price")
+                price = None
+                if isinstance(top, list):
+                    price = top[0] if len(top) > 0 else None
+                elif isinstance(top, dict):
+                    price = top.get("price")
                 if price is not None:
-                    self.best_ask[str(asset_id)] = float(price)
+                    try:
+                        self.best_ask[str(asset_id)] = float(price)
+                    except (ValueError, TypeError):
+                        pass
 
     def _on_error(self, ws: WebSocketApp, error: Exception) -> None:
         log.warning("WSS error: %s", error)
