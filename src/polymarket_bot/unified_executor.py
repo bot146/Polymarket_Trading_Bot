@@ -166,10 +166,19 @@ class UnifiedExecutor:
             )
 
     def _extract_order_id(self, response: object) -> str | None:
-        """Extract order ID from various response formats."""
-        if isinstance(response, dict):
-            return response.get("orderID") or response.get("orderId")
-        return getattr(response, "orderID", None) or getattr(response, "orderId", None)
+        """Extract order ID from various response formats.
+        
+        The py-clob-client library may return different formats:
+        - dict with "orderID" or "orderId" key
+        - object with orderID or orderId attribute
+        """
+        try:
+            if isinstance(response, dict):
+                return response.get("orderID") or response.get("orderId")
+            return getattr(response, "orderID", None) or getattr(response, "orderId", None)
+        except Exception as e:
+            log.warning(f"Failed to extract order ID from response: {e}")
+            return None
 
     def get_stats(self) -> dict[str, int]:
         """Get executor statistics."""

@@ -57,9 +57,16 @@ class MarketScanner:
     def _get(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Make a GET request to Gamma API with retries."""
         url = f"{self.api_base}{endpoint}"
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        return response.json()
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            log.error(f"HTTP error fetching {endpoint}: {e.response.status_code} - {e.response.text}")
+            raise
+        except requests.exceptions.RequestException as e:
+            log.error(f"Request failed for {endpoint}: {e}")
+            raise
 
     def get_all_markets(self, limit: int = 100, active_only: bool = True) -> list[MarketInfo]:
         """Fetch all markets from Gamma API.

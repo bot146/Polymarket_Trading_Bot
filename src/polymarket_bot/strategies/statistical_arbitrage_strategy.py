@@ -22,7 +22,11 @@ log = logging.getLogger(__name__)
 
 
 # Predefined correlated market pairs
-# In production, these could be learned from historical data
+# TODO: Move to external configuration file or database for easier updates
+# In production, these could be:
+# 1. Loaded from a JSON/YAML config file
+# 2. Learned from historical correlation analysis
+# 3. Updated dynamically based on market conditions
 CORRELATION_PAIRS = [
     {
         "name": "Trump + GOP Senate",

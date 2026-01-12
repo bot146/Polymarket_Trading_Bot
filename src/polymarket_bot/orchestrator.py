@@ -34,6 +34,15 @@ class OrchestratorConfig:
     scan_high_volume: bool = True
     scan_resolved: bool = True
     min_volume: Decimal = Decimal("5000")
+    
+    def __post_init__(self):
+        """Validate configuration values."""
+        if self.scan_interval <= 0:
+            raise ValueError("scan_interval must be positive")
+        if self.max_concurrent_trades < 0:
+            raise ValueError("max_concurrent_trades must be non-negative")
+        if self.min_volume <= 0:
+            raise ValueError("min_volume must be positive")
 
 
 class StrategyOrchestrator:
