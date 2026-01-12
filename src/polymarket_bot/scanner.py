@@ -19,6 +19,11 @@ log = logging.getLogger(__name__)
 
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 
+# Default limit for fetching markets when no specific limit is provided
+# Set high to capture all markets - Polymarket typically has 1000-3000 active markets
+# but we set a higher limit to ensure we don't miss any markets as the platform grows
+DEFAULT_FETCH_LIMIT = 10000
+
 
 @dataclass(frozen=True)
 class MarketInfo:
@@ -72,16 +77,16 @@ class MarketScanner:
         """Fetch all markets from Gamma API.
         
         Args:
-            limit: Maximum number of markets to fetch. If None, fetches all available markets.
+            limit: Maximum number of markets to fetch. If None, fetches all available markets
+                   up to DEFAULT_FETCH_LIMIT.
             active_only: If True, only return active (non-closed) markets.
             
         Returns:
             List of MarketInfo objects.
         """
         try:
-            # Default to fetching a large number if no limit specified
-            # Polymarket typically has 1000-3000 active markets
-            fetch_limit = limit if limit is not None else 10000
+            # Use provided limit or default to fetching all markets
+            fetch_limit = limit if limit is not None else DEFAULT_FETCH_LIMIT
             
             # Gamma API endpoint for markets
             response = self._get("/markets", params={"limit": fetch_limit, "active": active_only})
@@ -143,11 +148,12 @@ class MarketScanner:
         winning shares still trade below $1.
         
         Args:
-            limit: Maximum number of markets to fetch. If None, fetches all available.
+            limit: Maximum number of markets to fetch. If None, fetches all available
+                   resolved markets up to DEFAULT_FETCH_LIMIT.
         """
         try:
-            # Default to fetching a large number if no limit specified
-            fetch_limit = limit if limit is not None else 10000
+            # Use provided limit or default to fetching all markets
+            fetch_limit = limit if limit is not None else DEFAULT_FETCH_LIMIT
             
             # Look for closed/resolved markets
             response = self._get("/markets", params={"limit": fetch_limit, "closed": True})
