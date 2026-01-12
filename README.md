@@ -17,8 +17,9 @@ This bot features a sophisticated multi-strategy architecture inspired by succes
    - Critical urgency execution (these disappear fast!)
 
 3. **Statistical Arbitrage** 📊 - Trade correlated market divergences
-   - Trader "sharky6999": **$480k** scanning 100+ markets/minute
+   - Trader "sharky6999": **$480k** scanning ALL markets continuously
    - Long cheap, short expensive, profit on convergence
+   - Bot now scans **all available Polymarket markets** (10,000+ limit)
 
 4. **Spread Farming** 💰 (Coming Soon) - High-frequency market making
    - Trader "cry.eth2": **$194k** with 1M trades
@@ -30,7 +31,8 @@ This bot features a sophisticated multi-strategy architecture inspired by succes
 
 - **Modular Strategy Framework**: Easy to add/remove strategies
 - **Priority-Based Execution**: Urgent opportunities first
-- **Real-Time Market Scanner**: Discovers opportunities across ALL markets
+- **Comprehensive Market Scanner**: Scans **ALL** Polymarket markets (no 100-market limit)
+- **Bot-Inspired Patterns**: Strategies based on successful high-volume bots like @car, @rn1, @Account88888
 - **Production-Grade Reliability**:
   - HTTP timeout configuration prevents indefinite hangs
   - Cloudflare block detection and automatic cooldown
