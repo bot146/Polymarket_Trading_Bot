@@ -94,7 +94,11 @@ orch_config = OrchestratorConfig(
 ## 🛡️ Safety Features
 
 - **Kill Switch**: `KILL_SWITCH=1` stops all trading instantly
-- **Paper Mode**: Default mode - no real trades
+- **Paper Mode**: Default mode - simulates real trading with actual position tracking
+  - Tracks actual positions with entry/exit prices
+  - Calculates real P&L (realized and unrealized)
+  - Monitors market resolutions and redeemable positions
+  - Full profitability analysis (see [PAPER_MODE_PROFITABILITY.md](PAPER_MODE_PROFITABILITY.md))
 - **Position Limits**: Max concurrent positions configurable
 - **Order Size Caps**: `MAX_ORDER_USDC=20` limits exposure
 - **Edge Buffers**: `MIN_EDGE_CENTS` ensures profit after fees

@@ -36,6 +36,10 @@ class Settings:
     clob_http_timeout_seconds: float = 20.0
     clob_connect_timeout_seconds: float = 10.0
     cloudflare_block_cooldown_seconds: int = 600
+    
+    # Market scanning settings
+    market_fetch_limit: int = 10000  # Max markets to fetch from API (0 = unlimited within API constraints)
+    min_market_volume: Decimal = Decimal("5000")  # Minimum volume threshold in USDC
 
 
 def load_settings(env_file: str | None = None) -> Settings:
@@ -79,6 +83,9 @@ def load_settings(env_file: str | None = None) -> Settings:
         clob_http_timeout_seconds=float(os.getenv("CLOB_HTTP_TIMEOUT_SECONDS", "20.0")),
         clob_connect_timeout_seconds=float(os.getenv("CLOB_CONNECT_TIMEOUT_SECONDS", "10.0")),
         cloudflare_block_cooldown_seconds=int(os.getenv("CLOUDFLARE_BLOCK_COOLDOWN_SECONDS", "600")),
+        
+        market_fetch_limit=int(os.getenv("MARKET_FETCH_LIMIT", "10000")),
+        min_market_volume=Decimal(os.getenv("MIN_MARKET_VOLUME", "5000")),
     )
 
 

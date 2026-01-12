@@ -143,6 +143,8 @@ def main() -> None:
     log.info(f"Kill Switch: {'ENABLED' if settings.kill_switch else 'DISABLED'}")
     log.info(f"Max Order Size: ${settings.max_order_usdc}")
     log.info(f"Min Edge: {settings.min_edge_cents}¢")
+    log.info(f"Market Fetch Limit: {settings.market_fetch_limit} (0=unlimited within API constraints)")
+    log.info(f"Min Market Volume: ${settings.min_market_volume:,.0f}")
     
     # Register signal handlers for graceful shutdown
     sig.signal(sig.SIGINT, signal_handler)
@@ -191,7 +193,6 @@ def main() -> None:
         enable_arbitrage=True,
         enable_guaranteed_win=True,
         enable_stat_arb=False,  # Disabled by default - more complex
-        min_volume=Decimal("5000"),
     )
     
     orchestrator = StrategyOrchestrator(settings, orch_config)
