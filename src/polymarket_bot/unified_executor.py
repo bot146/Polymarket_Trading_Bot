@@ -38,6 +38,11 @@ class UnifiedExecutor:
         self.execution_count = 0
         self.success_count = 0
         self.failure_count = 0
+        
+        # Paper trading profitability tracking
+        self.paper_total_profit = Decimal("0")
+        self.paper_total_cost = Decimal("0")
+        self.paper_trades_by_strategy: dict[str, dict] = {}
 
     def execute_signal(
         self,
@@ -88,10 +93,27 @@ class UnifiedExecutor:
         strategy_type = signal.opportunity.strategy_type.value
         profit = signal.opportunity.expected_profit
         confidence = signal.opportunity.confidence
+        cost = signal.max_total_cost
+        
+        # Track profitability
+        self.paper_total_profit += profit
+        self.paper_total_cost += cost
+        
+        # Track by strategy
+        if strategy_type not in self.paper_trades_by_strategy:
+            self.paper_trades_by_strategy[strategy_type] = {
+                "count": 0,
+                "total_profit": Decimal("0"),
+                "total_cost": Decimal("0"),
+            }
+        
+        self.paper_trades_by_strategy[strategy_type]["count"] += 1
+        self.paper_trades_by_strategy[strategy_type]["total_profit"] += profit
+        self.paper_trades_by_strategy[strategy_type]["total_cost"] += cost
         
         log.warning(
             f"📄 PAPER TRADE [{strategy_type}]: "
-            f"profit=${profit:.4f} confidence={confidence:.2%} "
+            f"profit=${profit:.4f} cost=${cost:.2f} confidence={confidence:.2%} "
             f"trades={len(signal.trades)}"
         )
         
@@ -100,6 +122,13 @@ class UnifiedExecutor:
                 f"  Trade {i+1}: {trade.side} {trade.size:.2f} @ ${trade.price:.4f} "
                 f"token={trade.token_id[:8]}... type={trade.order_type}"
             )
+        
+        # Show running total
+        roi = (self.paper_total_profit / self.paper_total_cost * 100) if self.paper_total_cost > 0 else Decimal("0")
+        log.info(
+            f"  💰 Running Total: profit=${self.paper_total_profit:.4f} "
+            f"cost=${self.paper_total_cost:.2f} ROI={roi:.2f}%"
+        )
         
         return ExecutionResult(
             success=True,
@@ -180,10 +209,23 @@ class UnifiedExecutor:
             log.warning(f"Failed to extract order ID from response: {e}")
             return None
 
-    def get_stats(self) -> dict[str, int]:
-        """Get executor statistics."""
-        return {
+    def get_stats(self) -> dict:
+        """Get executor statistics including profitability."""
+        stats = {
             "total_executions": self.execution_count,
             "successful": self.success_count,
             "failed": self.failure_count,
+            "paper_total_profit": float(self.paper_total_profit),
+            "paper_total_cost": float(self.paper_total_cost),
+            "paper_roi": float((self.paper_total_profit / self.paper_total_cost * 100) if self.paper_total_cost > 0 else Decimal("0")),
+            "paper_trades_by_strategy": {
+                strategy: {
+                    "count": data["count"],
+                    "total_profit": float(data["total_profit"]),
+                    "total_cost": float(data["total_cost"]),
+                    "roi": float((data["total_profit"] / data["total_cost"] * 100) if data["total_cost"] > 0 else Decimal("0")),
+                }
+                for strategy, data in self.paper_trades_by_strategy.items()
+            },
         }
+        return stats

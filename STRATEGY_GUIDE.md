@@ -94,6 +94,8 @@ python -m polymarket_bot.app_multi
 python -m polymarket_bot.app_multi
 ```
 
+**💡 Paper Mode Profitability Tracking**: Paper mode now tracks all simulated trades and shows comprehensive profitability statistics including total profit, ROI, and per-strategy breakdown. See [PAPER_MODE_PROFITABILITY.md](PAPER_MODE_PROFITABILITY.md) for details.
+
 ## 📊 Strategy Configuration
 
 The orchestrator can be configured in `src/polymarket_bot/app_multi.py`:

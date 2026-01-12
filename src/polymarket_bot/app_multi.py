@@ -47,7 +47,7 @@ def print_banner():
 
 
 def print_stats(orchestrator: StrategyOrchestrator, executor: UnifiedExecutor, uptime: float):
-    """Print bot statistics."""
+    """Print bot statistics including profitability."""
     orch_stats = orchestrator.get_stats()
     exec_stats = executor.get_stats()
     
@@ -57,6 +57,24 @@ def print_stats(orchestrator: StrategyOrchestrator, executor: UnifiedExecutor, u
     log.info(f"📈 EXECUTIONS: total={exec_stats['total_executions']} success={exec_stats['successful']} failed={exec_stats['failed']}")
     log.info(f"💼 ACTIVE POSITIONS: {orch_stats['active_positions']}")
     log.info(f"🎯 STRATEGIES: {orch_stats['enabled_strategies']} enabled")
+    
+    # Show profitability for paper mode
+    if exec_stats['paper_total_cost'] > 0:
+        log.info("─" * 70)
+        log.info("💰 PAPER TRADING PROFITABILITY:")
+        log.info(f"   Total Profit: ${exec_stats['paper_total_profit']:.4f}")
+        log.info(f"   Total Cost: ${exec_stats['paper_total_cost']:.2f}")
+        log.info(f"   ROI: {exec_stats['paper_roi']:.2f}%")
+        
+        if exec_stats['paper_trades_by_strategy']:
+            log.info("   Strategy Breakdown:")
+            for strategy, data in exec_stats['paper_trades_by_strategy'].items():
+                log.info(
+                    f"     {strategy}: {data['count']} trades, "
+                    f"profit=${data['total_profit']:.4f}, "
+                    f"ROI={data['roi']:.2f}%"
+                )
+    
     log.info("=" * 70)
 
 
