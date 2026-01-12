@@ -17,6 +17,28 @@ class ApiCreds:
     api_passphrase: str
 
 
+def _configure_clob_http_client_timeouts(settings: Settings) -> None:
+    """Patch py-clob-client's module-level httpx client to include timeouts.
+    
+    py-clob-client uses a global `httpx.Client(http2=True)` without timeouts, which can hang
+    indefinitely on some networks. This keeps the bot responsive and makes failures actionable.
+    """
+    try:
+        import httpx
+        from py_clob_client.http_helpers import helpers as clob_helpers
+        
+        timeout = httpx.Timeout(
+            float(settings.clob_http_timeout_seconds),
+            connect=float(settings.clob_connect_timeout_seconds),
+        )
+        clob_helpers._http_client = httpx.Client(http2=True, timeout=timeout)
+        log.info("Configured CLOB HTTP client with timeouts (total=%.1fs, connect=%.1fs)",
+                settings.clob_http_timeout_seconds, settings.clob_connect_timeout_seconds)
+    except Exception as e:
+        # If patching fails, continue with py-clob-client defaults
+        log.warning("Could not configure CLOB HTTP timeouts: %s", e)
+
+
 def build_clob_client(settings: Settings) -> tuple[ClobClient, ApiCreds]:
     """Create a CLOB client and derive/create API creds.
 
@@ -33,6 +55,9 @@ def build_clob_client(settings: Settings) -> tuple[ClobClient, ApiCreds]:
     if settings.poly_signature_type in (1, 2) and not settings.poly_funder_address:
         raise ValueError("POLY_FUNDER_ADDRESS is required for proxy/safe signature types")
 
+    # Configure HTTP timeouts for reliability
+    _configure_clob_http_client_timeouts(settings)
+
     funder: str | None = settings.poly_funder_address
 
     # Note: py_clob_client uses `key=` for the private key.
@@ -45,12 +70,15 @@ def build_clob_client(settings: Settings) -> tuple[ClobClient, ApiCreds]:
             signature_type=settings.poly_signature_type,
             funder=funder,
         )
+        log.info("Created CLOB client with proxy/safe funding (funder=%s, sig_type=%d)",
+                funder[:10] + "..." if funder else "none", settings.poly_signature_type)
     else:
         client = ClobClient(
             settings.poly_host,
             key=settings.poly_private_key,
             chain_id=settings.poly_chain_id,
         )
+        log.info("Created CLOB client with EOA funding")
 
     creds_raw = client.derive_api_key()
 
@@ -72,6 +100,6 @@ def build_clob_client(settings: Settings) -> tuple[ClobClient, ApiCreds]:
     if not api_key or not api_secret or not api_passphrase:
         raise RuntimeError(f"Unexpected api creds shape from derive_api_key(): {creds}")
 
-    log.info("Derived API key for websocket + trading.")
+    log.info("Derived API key for websocket + trading")
 
     return client, ApiCreds(api_key=api_key, api_secret=api_secret, api_passphrase=api_passphrase)
