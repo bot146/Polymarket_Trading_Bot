@@ -81,6 +81,34 @@ class MarketWssClient:
         except Exception:
             return
 
+        # Handle both dict and list responses from WebSocket
+        if isinstance(data, list):
+            # If data is a list, process each item
+            for item in data:
+                if isinstance(item, dict):
+                    self._process_market_update(item)
+            # Fire on_event callback with the list
+            if self.on_event:
+                try:
+                    self.on_event(data)
+                except Exception:
+                    log.exception("Error in on_event callback")
+            return
+
+        # Handle dict response
+        if not isinstance(data, dict):
+            return
+
+        self._process_market_update(data)
+
+        if self.on_event:
+            try:
+                self.on_event(data)
+            except Exception:
+                log.exception("Error in on_event callback")
+
+    def _process_market_update(self, data: dict) -> None:
+        """Process a single market update from WebSocket."""
         # The exact schema can vary. We update best bid/ask opportunistically.
         # Common patterns include fields like: asset_id, bids, asks, price, changes, etc.
         asset_id = data.get("asset_id") or data.get("assetId")
@@ -91,21 +119,29 @@ class MarketWssClient:
             if isinstance(bids, list) and bids:
                 # Each level often like [price, size] or {price, size}
                 top = bids[0]
-                price = top[0] if isinstance(top, list) else top.get("price")
+                price = None
+                if isinstance(top, list):
+                    price = top[0] if len(top) > 0 else None
+                elif isinstance(top, dict):
+                    price = top.get("price")
                 if price is not None:
-                    self.best_bid[str(asset_id)] = float(price)
+                    try:
+                        self.best_bid[str(asset_id)] = float(price)
+                    except (ValueError, TypeError):
+                        pass
 
             if isinstance(asks, list) and asks:
                 top = asks[0]
-                price = top[0] if isinstance(top, list) else top.get("price")
+                price = None
+                if isinstance(top, list):
+                    price = top[0] if len(top) > 0 else None
+                elif isinstance(top, dict):
+                    price = top.get("price")
                 if price is not None:
-                    self.best_ask[str(asset_id)] = float(price)
-
-        if self.on_event:
-            try:
-                self.on_event(data)
-            except Exception:
-                log.exception("Error in on_event callback")
+                    try:
+                        self.best_ask[str(asset_id)] = float(price)
+                    except (ValueError, TypeError):
+                        pass
 
     def _on_error(self, ws: WebSocketApp, error: Exception) -> None:
         log.warning("WSS error: %s", error)

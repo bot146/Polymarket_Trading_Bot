@@ -1,10 +1,10 @@
 # Polymarket Trading Bot (Multi-Strategy)
 
-A production-grade Polymarket trading bot with **multiple proven strategies** for consistent profitability. Start with as little as $100 and scale through intelligent strategy orchestration.
+A **production-grade** Polymarket trading bot with **multiple proven strategies** for consistent profitability. Built for reliability, featuring robust error handling, precise order execution, and graceful recovery from network issues.
 
-## 🚀 What's New: Multi-Strategy System
+## 🚀 What's New: Production-Ready Multi-Strategy System
 
-This bot now features a sophisticated multi-strategy architecture inspired by successful traders who've made hundreds of thousands to millions in profit:
+This bot features a sophisticated multi-strategy architecture inspired by successful traders who've made hundreds of thousands to millions in profit, now enhanced with production-grade reliability:
 
 ### Available Strategies
 
@@ -31,6 +31,12 @@ This bot now features a sophisticated multi-strategy architecture inspired by su
 - **Modular Strategy Framework**: Easy to add/remove strategies
 - **Priority-Based Execution**: Urgent opportunities first
 - **Real-Time Market Scanner**: Discovers opportunities across ALL markets
+- **Production-Grade Reliability**:
+  - HTTP timeout configuration prevents indefinite hangs
+  - Cloudflare block detection and automatic cooldown
+  - Precise order quantization (avoids venue rejections)
+  - Structured error handling with actionable feedback
+  - WebSocket resilience (handles both list and dict message formats)
 - **Risk Management**: Position limits, kill switches, paper trading
 - **Comprehensive Testing**: 23 passing tests
 - **Production-Ready**: Logging, error handling, graceful shutdown
