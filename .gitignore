@@ -1,0 +1,20 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local config / secrets
+.env
+.env.*
+
+# Tooling caches
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+
