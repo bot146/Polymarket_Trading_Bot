@@ -18,6 +18,8 @@ class StrategyType(str, Enum):
     ARBITRAGE = "arbitrage"
     GUARANTEED_WIN = "guaranteed_win"
     STATISTICAL_ARBITRAGE = "statistical_arbitrage"
+    HIGH_FREQUENCY_SNIPING = "high_frequency_sniping"
+    MARKET_MAKING = "market_making"
     SPREAD_FARMING = "spread_farming"
     COPY_TRADING = "copy_trading"
     AI_PROBABILITY = "ai_probability"

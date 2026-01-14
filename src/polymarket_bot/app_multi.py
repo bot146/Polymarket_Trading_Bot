@@ -13,6 +13,7 @@ import sys
 import time
 from decimal import Decimal
 from pathlib import Path
+from decimal import Decimal as _Decimal
 
 from polymarket_bot.clob_client import build_clob_client
 from polymarket_bot.config import load_settings
@@ -71,6 +72,35 @@ def print_stats(
     log.info(f"📊 SIGNALS: seen={orch_stats['total_signals_seen']} executed={orch_stats['total_signals_executed']}")
     log.info(f"📈 EXECUTIONS: total={exec_stats['total_executions']} success={exec_stats['successful']} failed={exec_stats['failed']}")
     log.info(f"🎯 STRATEGIES: {orch_stats['enabled_strategies']} enabled")
+
+    # Execution mode + lightweight risk/ops metrics
+    profile = exec_stats.get("execution_profile")
+    if profile:
+        log.info(f"⚙️  EXECUTION PROFILE: {profile}")
+
+    hedge = exec_stats.get("hedge") or {}
+    if hedge:
+        log.info(f"🛡️  HEDGING: events={hedge.get('events', 0)} forced={hedge.get('forced_events', 0)}")
+
+    paper_open = exec_stats.get("paper_open_orders") or {}
+    if paper_open:
+        log.info(f"🧾 OPEN MAKER (paper): gtc_total={paper_open.get('open_gtc_total', 0)}")
+
+        # Surface the biggest offenders to help tune caps and find stuck markets.
+        by_cond = paper_open.get("open_gtc_by_condition") or {}
+        if isinstance(by_cond, dict) and by_cond:
+            top = sorted(by_cond.items(), key=lambda kv: kv[1], reverse=True)[:3]
+            top_str = ", ".join([f"{cid[:10]}…:{cnt}" for cid, cnt in top])
+            log.info(f"   Top open GTC by condition: {top_str}")
+
+    # Inventory top offenders by cost basis
+    if "portfolio" in exec_stats:
+        portfolio = exec_stats["portfolio"]
+        by_cond_cost = portfolio.get("cost_by_condition") if isinstance(portfolio, dict) else None
+        if isinstance(by_cond_cost, dict) and by_cond_cost:
+            top_cost = sorted(by_cond_cost.items(), key=lambda kv: float(kv[1]), reverse=True)[:3]
+            top_cost_str = ", ".join([f"{cid[:10]}…:${float(cost):.2f}" for cid, cost in top_cost])
+            log.info(f"🏦 Top inventory by condition (cost): {top_cost_str}")
     
     # Position information
     if "portfolio" in exec_stats:
@@ -126,6 +156,34 @@ def print_stats(
                 f"expected profit=${data['total_profit']:.4f}, "
                 f"ROI={data['roi']:.2f}%"
             )
+
+    # Quote churn (paper)
+    po = exec_stats.get("paper_orders") or {}
+    if isinstance(po, dict) and (po.get("canceled") or po.get("requoted")):
+        log.info("─" * 70)
+        log.info(
+            f"🔁 QUOTE CHURN (paper): canceled={po.get('canceled', 0)} "
+            f"requoted={po.get('requoted', 0)}"
+        )
+
+    # Strategy attribution (actual P&L)
+    if "portfolio" in exec_stats:
+        portfolio = exec_stats["portfolio"]
+        by_strat = portfolio.get("by_strategy") if isinstance(portfolio, dict) else None
+        if isinstance(by_strat, dict):
+            realized = by_strat.get("realized") or {}
+            unrealized = by_strat.get("unrealized") or {}
+            cost = by_strat.get("cost") or {}
+            if realized or unrealized or cost:
+                log.info("─" * 70)
+                log.info("🧠 STRATEGY ATTRIBUTION (actual):")
+                keys = sorted(set(realized.keys()) | set(unrealized.keys()) | set(cost.keys()))
+                for k in keys:
+                    log.info(
+                        f"   {k}: cost=${float(cost.get(k, 0.0)):.2f} "
+                        f"realized=${float(realized.get(k, 0.0)):.4f} "
+                        f"unrealized=${float(unrealized.get(k, 0.0)):.4f}"
+                    )
     
     log.info("=" * 70)
 
@@ -232,6 +290,24 @@ def main() -> None:
             
             # Run strategy scan
             signals = orchestrator.run_once()
+
+            # In PAPER mode, advance the paper fill simulator for resting maker
+            # orders using the latest top-of-book snapshot.
+            if settings.trading_mode == "paper":
+                tob = orchestrator.get_top_of_book_snapshot()
+                best_bid_map = tob.get("best_bid", {})
+                best_ask_map = tob.get("best_ask", {})
+                if best_bid_map or best_ask_map:
+                    token_ids = set(best_bid_map.keys()) | set(best_ask_map.keys())
+                    for token_id in token_ids:
+                        bid = best_bid_map.get(token_id)
+                        ask = best_ask_map.get(token_id)
+                        executor.on_market_update(
+                            token_id=token_id,
+                            best_bid=_Decimal(str(bid)) if bid is not None else None,
+                            best_ask=_Decimal(str(ask)) if ask is not None else None,
+                            best_ask_by_token={k: _Decimal(str(v)) for k, v in best_ask_map.items() if v is not None},
+                        )
             
             # Execute signals
             for signal in signals:

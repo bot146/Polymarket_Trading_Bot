@@ -281,6 +281,23 @@ class PositionManager:
         open_positions = self.get_open_positions()
         closed_positions = [p for p in self.positions.values() if p.is_closed]
         redeemable_positions = self.get_redeemable_positions()
+
+        # Breakdowns for risk/metrics.
+        cost_by_condition: dict[str, float] = {}
+        pnl_by_condition: dict[str, float] = {}
+        cost_by_strategy: dict[str, float] = {}
+        realized_by_strategy: dict[str, float] = {}
+        unrealized_by_strategy: dict[str, float] = {}
+
+        for p in open_positions + redeemable_positions:
+            cost_by_condition[p.condition_id] = cost_by_condition.get(p.condition_id, 0.0) + float(p.cost_basis)
+            pnl_by_condition[p.condition_id] = pnl_by_condition.get(p.condition_id, 0.0) + float(p.unrealized_pnl)
+
+            cost_by_strategy[p.strategy] = cost_by_strategy.get(p.strategy, 0.0) + float(p.cost_basis)
+            unrealized_by_strategy[p.strategy] = unrealized_by_strategy.get(p.strategy, 0.0) + float(p.unrealized_pnl)
+
+        for p in closed_positions:
+            realized_by_strategy[p.strategy] = realized_by_strategy.get(p.strategy, 0.0) + float(p.realized_pnl)
         
         total_realized_pnl = sum(p.realized_pnl for p in closed_positions)
         total_unrealized_pnl = sum(p.unrealized_pnl for p in open_positions + redeemable_positions)
@@ -296,6 +313,13 @@ class PositionManager:
             "total_pnl": float(total_realized_pnl + total_unrealized_pnl),
             "total_cost_basis": float(total_cost_basis),
             "realized_roi": float((total_realized_pnl / total_cost_basis * 100) if total_cost_basis > 0 else Decimal("0")),
+            "cost_by_condition": cost_by_condition,
+            "unrealized_pnl_by_condition": pnl_by_condition,
+            "by_strategy": {
+                "cost": cost_by_strategy,
+                "realized": realized_by_strategy,
+                "unrealized": unrealized_by_strategy,
+            },
         }
     
     def _save_positions(self) -> None:

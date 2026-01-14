@@ -166,3 +166,56 @@ def test_arbitrage_strategy_calculates_size_correctly():
     
     assert signal.trades[0].size == expected_size
     assert signal.trades[1].size == expected_size
+
+
+def test_arbitrage_strategy_strict_applies_edge_buffer():
+    """Strict mode should require min_edge + buffer."""
+    # Raw edge here is 2.0 cents: 1 - (0.49 + 0.49) = 0.02
+    # With min_edge=1.5c and buffer=1.0c => threshold = 2.5c => should NOT trade.
+    strategy = ArbitrageStrategy(
+        min_edge_cents=Decimal("1.5"),
+        edge_buffer_cents=Decimal("1.0"),
+        strict=True,
+        require_top_of_book=True,
+    )
+
+    market_data = {
+        "markets": [
+            {
+                "condition_id": "cond1",
+                "tokens": [
+                    {"token_id": "yes1", "outcome": "YES", "price": 0.49, "best_ask": 0.49},
+                    {"token_id": "no1", "outcome": "NO", "price": 0.49, "best_ask": 0.49},
+                ],
+            }
+        ]
+    }
+
+    signals = strategy.scan(market_data)
+    assert len(signals) == 0
+
+
+def test_arbitrage_strategy_strict_requires_top_of_book():
+    """If require_top_of_book is enabled, missing best_ask should suppress signals."""
+    strategy = ArbitrageStrategy(
+        min_edge_cents=Decimal("0.5"),
+        edge_buffer_cents=Decimal("0.0"),
+        strict=True,
+        require_top_of_book=True,
+    )
+
+    # Prices imply a strong arb, but we omit best_ask to simulate missing websocket data.
+    market_data = {
+        "markets": [
+            {
+                "condition_id": "cond1",
+                "tokens": [
+                    {"token_id": "yes1", "outcome": "YES", "price": 0.40},
+                    {"token_id": "no1", "outcome": "NO", "price": 0.40},
+                ],
+            }
+        ]
+    }
+
+    signals = strategy.scan(market_data)
+    assert len(signals) == 0

@@ -31,12 +31,18 @@ class ArbitrageStrategy(Strategy):
         self,
         name: str = "arbitrage",
         min_edge_cents: Decimal = Decimal("1.5"),
+        edge_buffer_cents: Decimal = Decimal("0"),
         max_order_usdc: Decimal = Decimal("20"),
+        strict: bool = False,
+        require_top_of_book: bool = False,
         enabled: bool = True,
     ):
         super().__init__(name=name, enabled=enabled)
         self.min_edge_cents = min_edge_cents
+        self.edge_buffer_cents = edge_buffer_cents
         self.max_order_usdc = max_order_usdc
+        self.strict = strict
+        self.require_top_of_book = require_top_of_book
 
     def scan(self, market_data: dict[str, Any]) -> list[StrategySignal]:
         """Scan for arbitrage opportunities in binary markets.
@@ -75,9 +81,19 @@ class ArbitrageStrategy(Strategy):
             if not yes_token or not no_token:
                 continue
 
-            # Get best ask prices
-            yes_ask = yes_token.get("best_ask") or yes_token.get("price")
-            no_ask = no_token.get("best_ask") or no_token.get("price")
+            # Get best ask prices.
+            # In strict mode we prefer top-of-book prices and can optionally
+            # require them to be present (avoid Gamma fallback).
+            yes_best_ask = yes_token.get("best_ask")
+            no_best_ask = no_token.get("best_ask")
+
+            yes_ask = yes_best_ask or yes_token.get("price")
+            no_ask = no_best_ask or no_token.get("price")
+
+            if self.strict and self.require_top_of_book:
+                if yes_best_ask is None or no_best_ask is None:
+                    # Without executable prices, strict arb shouldn't fire.
+                    continue
             
             if yes_ask is None or no_ask is None:
                 continue
@@ -90,7 +106,8 @@ class ArbitrageStrategy(Strategy):
             edge = Decimal("1") - total_cost
             edge_cents = edge * Decimal("100")
 
-            if edge_cents >= self.min_edge_cents:
+            min_edge_cents = self.min_edge_cents + (self.edge_buffer_cents if self.strict else Decimal("0"))
+            if edge_cents >= min_edge_cents:
                 # Calculate position size
                 size = self._calculate_size(yes_ask, no_ask)
                 
@@ -107,6 +124,8 @@ class ArbitrageStrategy(Strategy):
                             "yes_ask": float(yes_ask),
                             "no_ask": float(no_ask),
                             "edge_cents": float(edge_cents),
+                            "min_edge_cents": float(min_edge_cents),
+                            "strict": bool(self.strict),
                         },
                     )
 

@@ -25,6 +25,20 @@ class Settings:
     max_order_usdc: Decimal = Decimal("20")
     min_edge_cents: Decimal = Decimal("1.5")
 
+    # Execution profile
+    # - hard_guarantee: hedge immediately on any imbalance; prefer taker/atomic style
+    # - aggressive_maker: allow brief opportunistic window before forced hedge
+    execution_profile: str = "aggressive_maker"  # hard_guarantee|aggressive_maker
+    hedge_timeout_ms: int = 1200
+    max_inventory_usdc_per_condition: Decimal = Decimal("25")
+    max_open_gtc_orders_per_condition: int = 8
+
+    # Paper quoting maintenance (paper mode only)
+    enable_paper_requote: bool = True
+    requote_max_age_seconds: float = 20.0
+    requote_max_distance: Decimal = Decimal("0.02")
+    requote_cooldown_ms: int = 750
+
     # Arbitrage scanning
     # Extra cushion for fees/slippage/leg risk.
     edge_buffer_cents: Decimal = Decimal("0.5")
@@ -76,6 +90,16 @@ def load_settings(env_file: str | None = None) -> Settings:
         max_order_usdc=Decimal(os.getenv("MAX_ORDER_USDC", "20")),
         min_edge_cents=Decimal(os.getenv("MIN_EDGE_CENTS", "1.5")),
         edge_buffer_cents=Decimal(os.getenv("EDGE_BUFFER_CENTS", "0.5")),
+
+        execution_profile=os.getenv("EXECUTION_PROFILE", "aggressive_maker").strip().lower(),
+        hedge_timeout_ms=int(os.getenv("HEDGE_TIMEOUT_MS", "1200")),
+        max_inventory_usdc_per_condition=Decimal(os.getenv("MAX_INVENTORY_USDC_PER_CONDITION", "25")),
+        max_open_gtc_orders_per_condition=int(os.getenv("MAX_OPEN_GTC_ORDERS_PER_CONDITION", "8")),
+
+        enable_paper_requote=parse_bool(os.getenv("ENABLE_PAPER_REQUOTE"), True),
+        requote_max_age_seconds=float(os.getenv("REQUOTE_MAX_AGE_SECONDS", "20.0")),
+        requote_max_distance=Decimal(os.getenv("REQUOTE_MAX_DISTANCE", "0.02")),
+        requote_cooldown_ms=int(os.getenv("REQUOTE_COOLDOWN_MS", "750")),
         
         data_api_first=parse_bool(os.getenv("DATA_API_FIRST"), True),
         disable_clob_trade_fetch=parse_bool(os.getenv("DISABLE_CLOB_TRADE_FETCH"), False),

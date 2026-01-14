@@ -12,10 +12,13 @@ from decimal import Decimal
 from typing import Any
 
 from polymarket_bot.config import Settings
+from polymarket_bot.market_feed import EnhancedMarketFeed
 from polymarket_bot.scanner import MarketScanner
 from polymarket_bot.strategy import StrategyRegistry, StrategySignal
 from polymarket_bot.strategies.arbitrage_strategy import ArbitrageStrategy
 from polymarket_bot.strategies.guaranteed_win_strategy import GuaranteedWinStrategy
+from polymarket_bot.strategies.market_making_strategy import MarketMakingStrategy
+from polymarket_bot.strategies.sniping_strategy import SnipingStrategy
 from polymarket_bot.strategies.statistical_arbitrage_strategy import StatisticalArbitrageStrategy
 
 log = logging.getLogger(__name__)
@@ -29,6 +32,8 @@ class OrchestratorConfig:
     enable_arbitrage: bool = True
     enable_guaranteed_win: bool = True
     enable_stat_arb: bool = False  # More complex, disabled by default
+    enable_sniping: bool = True
+    enable_market_making: bool = True
     
     # Market scanning
     scan_high_volume: bool = True
@@ -56,6 +61,11 @@ class StrategyOrchestrator:
         
         # Initialize strategies
         self._init_strategies()
+
+        # Realtime top-of-book feed (best bid/ask). This is optional: if it can't
+        # start or doesn't have data yet, we fall back to Gamma prices.
+        self._feed: EnhancedMarketFeed | None = None
+        self._feed_started = False
         
         # State tracking
         self.active_positions: list[str] = []  # Track active condition_ids
@@ -65,9 +75,18 @@ class StrategyOrchestrator:
     def _init_strategies(self) -> None:
         """Initialize and register trading strategies."""
         if self.config.enable_arbitrage:
+            # Strict arb (used for BOTH paper and live):
+            # - include edge buffer for fees/leg risk
+            # - require top-of-book (avoid Gamma fallback)
+            # Paper mode exists to test production logic with simulated fills,
+            # so the signal-generation rules should match live mode.
+            strict_arb = True
             arb_strategy = ArbitrageStrategy(
                 min_edge_cents=self.settings.min_edge_cents,
+                edge_buffer_cents=self.settings.edge_buffer_cents,
                 max_order_usdc=self.settings.max_order_usdc,
+                strict=strict_arb,
+                require_top_of_book=strict_arb,
                 enabled=True,
             )
             self.registry.register(arb_strategy)
@@ -89,6 +108,16 @@ class StrategyOrchestrator:
             )
             self.registry.register(stat_arb_strategy)
             log.info("Registered: StatisticalArbitrageStrategy")
+
+        if self.config.enable_sniping:
+            snipe_strategy = SnipingStrategy(enabled=True)
+            self.registry.register(snipe_strategy)
+            log.info("Registered: SnipingStrategy")
+
+        if self.config.enable_market_making:
+            mm_strategy = MarketMakingStrategy(enabled=True)
+            self.registry.register(mm_strategy)
+            log.info("Registered: MarketMakingStrategy")
 
     def scan_and_collect_signals(self) -> list[StrategySignal]:
         """Scan markets and collect signals from all strategies."""
@@ -136,6 +165,26 @@ class StrategyOrchestrator:
     def _gather_market_data(self) -> dict[str, Any]:
         """Gather market data from scanner."""
         market_data: dict[str, Any] = {"markets": [], "resolved_markets": []}
+
+        # Lazy-start websocket feed once we know what assets to subscribe to.
+        # We do this here (instead of in __init__) because the asset universe is
+        # derived from the scanner results.
+        def _maybe_start_feed(token_ids: list[str]) -> None:
+            if self._feed_started:
+                return
+            if not token_ids:
+                return
+
+            try:
+                self._feed = EnhancedMarketFeed(asset_ids=token_ids)
+                self._feed.start()
+                self._feed_started = True
+                log.info("✅ Top-of-book feed started (assets=%d)", len(token_ids))
+            except Exception as e:
+                # Data-only / restricted networks should still allow the bot to run.
+                self._feed_started = True
+                self._feed = None
+                log.warning("⚠️  Could not start top-of-book feed; using Gamma price fallback: %s", e)
         
         try:
             # Scan high-volume active markets
@@ -144,6 +193,24 @@ class StrategyOrchestrator:
                     min_volume=self.settings.min_market_volume,  # Use settings
                     limit=None  # Scan all markets above volume threshold
                 )
+
+                # Gather token ids and start feed (once).
+                token_ids: list[str] = []
+                for m in high_vol_markets:
+                    for t in m.tokens:
+                        if t.token_id:
+                            token_ids.append(str(t.token_id))
+                _maybe_start_feed(list(dict.fromkeys(token_ids)))
+
+                # Snapshot to avoid locking per-token.
+                feed_snapshot: dict[str, Any] = {}
+                if self._feed is not None:
+                    try:
+                        feed_snapshot = self._feed.get_market_data()
+                    except Exception:
+                        feed_snapshot = {}
+                best_bid_map: dict[str, float] = feed_snapshot.get("best_bid", {}) if isinstance(feed_snapshot, dict) else {}
+                best_ask_map: dict[str, float] = feed_snapshot.get("best_ask", {}) if isinstance(feed_snapshot, dict) else {}
                 
                 # Convert to dict format for strategies
                 for market in high_vol_markets:
@@ -157,7 +224,17 @@ class StrategyOrchestrator:
                                 "token_id": token.token_id,
                                 "outcome": token.outcome,
                                 "price": float(token.price),
-                                "best_ask": float(token.price),  # Scanner doesn't have bid/ask yet
+                                # Prefer executable top-of-book prices; fall back to Gamma if missing.
+                                "best_bid": (
+                                    float(best_bid_map[str(token.token_id)])
+                                    if str(token.token_id) in best_bid_map and best_bid_map[str(token.token_id)] is not None
+                                    else None
+                                ),
+                                "best_ask": (
+                                    float(best_ask_map[str(token.token_id)])
+                                    if str(token.token_id) in best_ask_map and best_ask_map[str(token.token_id)] is not None
+                                    else float(token.price)
+                                ),
                                 "volume": float(token.volume),
                             }
                             for token in market.tokens
@@ -168,6 +245,15 @@ class StrategyOrchestrator:
             # Scan resolved markets for guaranteed wins
             if self.config.scan_resolved:
                 resolved_markets = self.scanner.get_resolved_markets(limit=None)  # Scan all resolved markets
+
+                # Reuse feed where possible (resolved markets should share token ids)
+                feed_snapshot: dict[str, Any] = {}
+                if self._feed is not None:
+                    try:
+                        feed_snapshot = self._feed.get_market_data()
+                    except Exception:
+                        feed_snapshot = {}
+                best_ask_map: dict[str, float] = feed_snapshot.get("best_ask", {}) if isinstance(feed_snapshot, dict) else {}
                 
                 for market in resolved_markets:
                     market_dict = {
@@ -180,7 +266,11 @@ class StrategyOrchestrator:
                                 "token_id": token.token_id,
                                 "outcome": token.outcome,
                                 "price": float(token.price),
-                                "best_ask": float(token.price),
+                                "best_ask": (
+                                    float(best_ask_map[str(token.token_id)])
+                                    if str(token.token_id) in best_ask_map and best_ask_map[str(token.token_id)] is not None
+                                    else float(token.price)
+                                ),
                             }
                             for token in market.tokens
                         ],
@@ -232,3 +322,30 @@ class StrategyOrchestrator:
             "active_positions": len(self.active_positions),
             "enabled_strategies": len(self.registry.get_enabled()),
         }
+
+    def get_top_of_book_snapshot(self) -> dict[str, dict[str, float]]:
+        """Return the latest top-of-book snapshot.
+
+        Returns:
+            {"best_bid": {token_id: price}, "best_ask": {token_id: price}}
+
+        Notes:
+            If the websocket feed isn't running or isn't ready, returns empty maps.
+        """
+        if self._feed is None:
+            return {"best_bid": {}, "best_ask": {}}
+        try:
+            snap = self._feed.get_market_data()
+            if not isinstance(snap, dict):
+                return {"best_bid": {}, "best_ask": {}}
+            best_bid = snap.get("best_bid", {})
+            best_ask = snap.get("best_ask", {})
+            if not isinstance(best_bid, dict) or not isinstance(best_ask, dict):
+                return {"best_bid": {}, "best_ask": {}}
+            # Ensure str keys.
+            return {
+                "best_bid": {str(k): float(v) for k, v in best_bid.items() if v is not None},
+                "best_ask": {str(k): float(v) for k, v in best_ask.items() if v is not None},
+            }
+        except Exception:
+            return {"best_bid": {}, "best_ask": {}}
