@@ -18,12 +18,19 @@ Contract (v0):
 - `PaperBlotter.update_market(token_id, best_bid, best_ask)` can generate fills
   when the market crosses the order price.
 
+Queue position modeling (v1):
+- `fill_probability`: chance a maker order fills when the market crosses its price
+  (simulates being at the back of the queue).
+- `require_volume_cross`: if True, only fill when we see *through* the price level
+  (i.e., BUY fills when best_ask < order.price, not <=).
+
 This intentionally doesn't try to perfectly model Polymarket matching.
-It’s just enough realism to stop maker orders from magically filling.
+It's just enough realism to stop maker orders from magically filling.
 """
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
@@ -68,13 +75,30 @@ class PaperOrder:
 
 
 class PaperBlotter:
-    """In-memory order blotter for paper mode."""
+    """In-memory order blotter for paper mode.
 
-    def __init__(self) -> None:
+    Parameters:
+        fill_probability: probability (0–1) that a resting maker GTC order fills
+            when the market crosses its price.  Default 1.0 = always fill on cross
+            (v0 behaviour).  Lower values simulate queue position.
+        require_volume_cross: if *True*, BUY GTC orders only fill when
+            best_ask **strictly less** than order price (not equal), simulating
+            that someone has to trade *through* the price level for a back-of-
+            queue order to be reached.  Similarly for SELL.
+    """
+
+    def __init__(
+        self,
+        *,
+        fill_probability: float = 1.0,
+        require_volume_cross: bool = False,
+    ) -> None:
         self._next_id = 1
         self._orders: dict[str, PaperOrder] = {}
         self._best_bid: dict[str, Decimal | None] = {}
         self._best_ask: dict[str, Decimal | None] = {}
+        self._fill_probability = max(0.0, min(1.0, fill_probability))
+        self._require_volume_cross = require_volume_cross
 
     def submit(
         self,
@@ -232,9 +256,13 @@ class PaperBlotter:
     def update_market(self, *, token_id: str, best_bid: Decimal | None, best_ask: Decimal | None) -> list[PaperFill]:
         """Update market and fill any now-marketable GTC orders.
 
-        Rules (simple):
-        - BUY fills if best_ask is not None and best_ask <= order.price
-        - SELL fills if best_bid is not None and best_bid >= order.price
+        Rules (with queue-position modelling):
+        - BUY fills if best_ask crosses the order price.
+        - SELL fills if best_bid crosses the order price.
+        - If `require_volume_cross` is True, crossing is *strict* (< / >).
+          Otherwise crossing includes equality (<= / >=).
+        - Even when crossed, the order only fills with probability
+          `fill_probability` (simulates queue position).
 
         We fill the *entire* remaining size once marketable.
         """
@@ -252,31 +280,41 @@ class PaperBlotter:
             if order.order_type != "GTC":
                 continue
 
-            if order.side == "BUY" and best_ask is not None and best_ask <= order.price:
-                fill_size = order.remaining
-                order.filled_size += fill_size
-                order.status = PaperOrderStatus.FILLED
-                fills.append(
-                    PaperFill(
-                        order_id=order.order_id,
-                        token_id=order.token_id,
-                        side=order.side,
-                        fill_price=best_ask,
-                        fill_size=fill_size,
-                    )
+            crossed = False
+            fill_price_val: Decimal | None = None
+
+            if order.side == "BUY" and best_ask is not None:
+                if self._require_volume_cross:
+                    crossed = best_ask < order.price
+                else:
+                    crossed = best_ask <= order.price
+                fill_price_val = best_ask
+
+            elif order.side == "SELL" and best_bid is not None:
+                if self._require_volume_cross:
+                    crossed = best_bid > order.price
+                else:
+                    crossed = best_bid >= order.price
+                fill_price_val = best_bid
+
+            if not crossed or fill_price_val is None:
+                continue
+
+            # Probabilistic fill — simulates queue position.
+            if self._fill_probability < 1.0 and random.random() > self._fill_probability:
+                continue
+
+            fill_size = order.remaining
+            order.filled_size += fill_size
+            order.status = PaperOrderStatus.FILLED
+            fills.append(
+                PaperFill(
+                    order_id=order.order_id,
+                    token_id=order.token_id,
+                    side=order.side,
+                    fill_price=fill_price_val,
+                    fill_size=fill_size,
                 )
-            elif order.side == "SELL" and best_bid is not None and best_bid >= order.price:
-                fill_size = order.remaining
-                order.filled_size += fill_size
-                order.status = PaperOrderStatus.FILLED
-                fills.append(
-                    PaperFill(
-                        order_id=order.order_id,
-                        token_id=order.token_id,
-                        side=order.side,
-                        fill_price=best_bid,
-                        fill_size=fill_size,
-                    )
-                )
+            )
 
         return fills

@@ -35,12 +35,14 @@ class GuaranteedWinStrategy(Strategy):
         min_discount_cents: Decimal = Decimal("5.0"),  # Min discount to consider
         max_price: Decimal = Decimal("0.95"),  # Don't buy above 95 cents
         max_order_usdc: Decimal = Decimal("50"),  # Willing to deploy more capital here
+        taker_fee_rate: Decimal = Decimal("0.02"),
         enabled: bool = True,
     ):
         super().__init__(name=name, enabled=enabled)
         self.min_discount_cents = min_discount_cents
         self.max_price = max_price
         self.max_order_usdc = max_order_usdc
+        self.taker_fee_rate = taker_fee_rate
 
     def scan(self, market_data: dict[str, Any]) -> list[StrategySignal]:
         """Scan for resolved markets with mispriced winning shares.
@@ -91,8 +93,9 @@ class GuaranteedWinStrategy(Strategy):
 
             ask_price = Decimal(str(ask_price))
 
-            # Calculate discount from $1
-            discount = Decimal("1") - ask_price
+            # Calculate discount from $1 (after fees)
+            fee = ask_price * self.taker_fee_rate
+            discount = Decimal("1") - ask_price - fee
             discount_cents = discount * Decimal("100")
 
             # Only trade if discount is significant and price reasonable

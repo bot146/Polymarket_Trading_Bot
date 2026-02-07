@@ -53,6 +53,9 @@ class SnipingConfig:
     # how many tokens per scan (prevents a noisy feed from spamming)
     max_signals_per_scan: int = 5
 
+    # Fee rate for cost/profit calculations
+    maker_fee_rate: Decimal = Decimal("0.005")
+
 
 class SnipingStrategy(Strategy):
     """Generates BUY signals for tokens with wide spreads and a cheap ask."""
@@ -121,7 +124,9 @@ class SnipingStrategy(Strategy):
                     continue
 
                 # Expected profit is heuristic: if we buy at bid, mark to mid.
-                expected_profit = (mid - target_price) * size
+                # Subtract maker fee from expected profit since this is a GTC order.
+                fee_cost = target_price * size * self.config.maker_fee_rate
+                expected_profit = (mid - target_price) * size - fee_cost
 
                 opportunity = Opportunity(
                     strategy_type=StrategyType.HIGH_FREQUENCY_SNIPING,

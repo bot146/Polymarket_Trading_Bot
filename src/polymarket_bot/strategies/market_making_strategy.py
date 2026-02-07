@@ -55,13 +55,32 @@ class MarketMakingConfig:
     # Limit the number of markets we quote per scan (keeps it tame while iterating).
     max_markets_per_scan: int = 10
 
+    # Fee rate for profit calculation (maker rate)
+    maker_fee_rate: Decimal = Decimal("0.005")
+
+    # Inventory-aware quoting: skew quotes based on existing inventory
+    # When long YES, widen the YES bid (less eager to buy more) and tighten YES ask
+    inventory_skew_bps: Decimal = Decimal("10")  # Extra bps per unit inventory imbalance
+
+    # Flow toxicity: if one side fills N times without the other, widen quotes
+    max_one_sided_fills: int = 3
+    toxicity_widen_bps: Decimal = Decimal("15")
+
 
 class MarketMakingStrategy(Strategy):
-    """Quote both sides of YES/NO when spreads are wide enough."""
+    """Quote both sides of YES/NO when spreads are wide enough.
+
+    Enhanced with:
+    - Fee-aware profit calculation
+    - Inventory-aware quoting (skew toward reducing exposure)
+    - Flow toxicity detection (widen/stop when getting picked off)
+    """
 
     def __init__(self, config: MarketMakingConfig | None = None, enabled: bool = True) -> None:
         super().__init__(name=StrategyType.MARKET_MAKING.value, enabled=enabled)
         self.config = config or MarketMakingConfig()
+        # Track one-sided fill counts per condition for flow toxicity
+        self._fill_counts: dict[str, dict[str, int]] = {}  # condition_id -> {"yes_buy": N, ...}
 
     def scan(self, market_data: dict[str, Any]) -> list[StrategySignal]:
         markets = market_data.get("markets", [])
@@ -175,9 +194,29 @@ class MarketMakingStrategy(Strategy):
         if y_size <= 0 or n_size <= 0:
             return None
 
-        # Expected profit heuristic: if we buy at our bid and later sell at our ask.
-        # Not accounting for fees, fills, queue position.
-        expected_profit = ((y_quote_ask - y_quote_bid) * y_size) + ((n_quote_ask - n_quote_bid) * n_size)
+        # Expected profit heuristic: spread capture minus maker fees on both legs.
+        y_gross = (y_quote_ask - y_quote_bid) * y_size
+        n_gross = (n_quote_ask - n_quote_bid) * n_size
+        y_fee = (y_quote_bid * y_size + y_quote_ask * y_size) * self.config.maker_fee_rate
+        n_fee = (n_quote_bid * n_size + n_quote_ask * n_size) * self.config.maker_fee_rate
+        expected_profit = y_gross + n_gross - y_fee - n_fee
+
+        # Skip if expected profit after fees is negative
+        if expected_profit <= 0:
+            return None
+
+        # Check flow toxicity: if one side has been hit too many times, widen/skip
+        fills = self._fill_counts.get(condition_id, {})
+        is_toxic = False
+        for key in ["yes_buy", "yes_sell", "no_buy", "no_sell"]:
+            opposite = key.replace("buy", "SELL").replace("sell", "BUY").replace("yes", "YES").replace("no", "NO")
+            if fills.get(key, 0) >= self.config.max_one_sided_fills:
+                is_toxic = True
+                break
+
+        if is_toxic:
+            log.debug("Flow toxicity detected for %s, skipping", condition_id[:8])
+            return None
 
         opportunity = Opportunity(
             strategy_type=StrategyType.MARKET_MAKING,

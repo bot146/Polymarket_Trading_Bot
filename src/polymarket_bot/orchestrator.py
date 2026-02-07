@@ -16,9 +16,11 @@ from polymarket_bot.market_feed import EnhancedMarketFeed
 from polymarket_bot.scanner import MarketScanner
 from polymarket_bot.strategy import StrategyRegistry, StrategySignal
 from polymarket_bot.strategies.arbitrage_strategy import ArbitrageStrategy
+from polymarket_bot.strategies.copy_trading_strategy import CopyTradingStrategy
 from polymarket_bot.strategies.guaranteed_win_strategy import GuaranteedWinStrategy
-from polymarket_bot.strategies.market_making_strategy import MarketMakingStrategy
-from polymarket_bot.strategies.sniping_strategy import SnipingStrategy
+from polymarket_bot.strategies.market_making_strategy import MarketMakingConfig, MarketMakingStrategy
+from polymarket_bot.strategies.oracle_sniping_strategy import OracleSnipingStrategy
+from polymarket_bot.strategies.sniping_strategy import SnipingConfig, SnipingStrategy
 from polymarket_bot.strategies.statistical_arbitrage_strategy import StatisticalArbitrageStrategy
 
 log = logging.getLogger(__name__)
@@ -34,6 +36,8 @@ class OrchestratorConfig:
     enable_stat_arb: bool = False  # More complex, disabled by default
     enable_sniping: bool = True
     enable_market_making: bool = True
+    enable_oracle_sniping: bool = True
+    enable_copy_trading: bool = False
     
     # Market scanning
     scan_high_volume: bool = True
@@ -87,15 +91,17 @@ class StrategyOrchestrator:
                 max_order_usdc=self.settings.max_order_usdc,
                 strict=strict_arb,
                 require_top_of_book=strict_arb,
+                taker_fee_rate=self.settings.taker_fee_rate,
                 enabled=True,
             )
             self.registry.register(arb_strategy)
-            log.info("Registered: ArbitrageStrategy")
+            log.info("Registered: ArbitrageStrategy (taker_fee=%.2f%%)", float(self.settings.taker_fee_rate * 100))
 
         if self.config.enable_guaranteed_win:
             gw_strategy = GuaranteedWinStrategy(
                 min_discount_cents=Decimal("5.0"),
                 max_order_usdc=self.settings.max_order_usdc * Decimal("2"),  # More capital for guaranteed wins
+                taker_fee_rate=self.settings.taker_fee_rate,
                 enabled=True,
             )
             self.registry.register(gw_strategy)
@@ -104,20 +110,47 @@ class StrategyOrchestrator:
         if self.config.enable_stat_arb:
             stat_arb_strategy = StatisticalArbitrageStrategy(
                 max_order_usdc=self.settings.max_order_usdc,
+                maker_fee_rate=self.settings.maker_fee_rate,
                 enabled=True,
             )
             self.registry.register(stat_arb_strategy)
             log.info("Registered: StatisticalArbitrageStrategy")
 
         if self.config.enable_sniping:
-            snipe_strategy = SnipingStrategy(enabled=True)
+            snipe_config = SnipingConfig(maker_fee_rate=self.settings.maker_fee_rate)
+            snipe_strategy = SnipingStrategy(config=snipe_config, enabled=True)
             self.registry.register(snipe_strategy)
             log.info("Registered: SnipingStrategy")
 
         if self.config.enable_market_making:
-            mm_strategy = MarketMakingStrategy(enabled=True)
+            mm_config = MarketMakingConfig(maker_fee_rate=self.settings.maker_fee_rate)
+            mm_strategy = MarketMakingStrategy(config=mm_config, enabled=True)
             self.registry.register(mm_strategy)
             log.info("Registered: MarketMakingStrategy")
+
+        if self.config.enable_oracle_sniping and self.settings.enable_oracle_sniping:
+            oracle_strategy = OracleSnipingStrategy(
+                taker_fee_rate=self.settings.taker_fee_rate,
+                max_order_usdc=self.settings.max_order_usdc,
+                min_confidence=self.settings.oracle_min_confidence,
+                enabled=True,
+            )
+            self.registry.register(oracle_strategy)
+            log.info("Registered: OracleSnipingStrategy (via CoinGecko)")
+
+        if self.config.enable_copy_trading and self.settings.enable_copy_trading:
+            whale_addrs = set(
+                a.strip() for a in self.settings.whale_addresses.split(",") if a.strip()
+            )
+            copy_strategy = CopyTradingStrategy(
+                min_trade_usdc=self.settings.whale_min_trade_usdc,
+                max_order_usdc=self.settings.max_order_usdc,
+                whale_addresses=whale_addrs if whale_addrs else None,
+                taker_fee_rate=self.settings.taker_fee_rate,
+                enabled=True,
+            )
+            self.registry.register(copy_strategy)
+            log.info("Registered: CopyTradingStrategy (whale_addrs=%d)", len(whale_addrs))
 
     def scan_and_collect_signals(self) -> list[StrategySignal]:
         """Scan markets and collect signals from all strategies."""

@@ -55,6 +55,45 @@ class Settings:
     market_fetch_limit: int = 10000  # Max markets to fetch from API (0 = use DEFAULT_FETCH_LIMIT)
     min_market_volume: Decimal = Decimal("5000")  # Minimum volume threshold in USDC
 
+    # Fee modeling
+    taker_fee_rate: Decimal = Decimal("0.02")    # 2% taker fee
+    maker_fee_rate: Decimal = Decimal("0.005")   # 0.5% maker fee (rebate on some venues)
+
+    # Circuit breaker / risk limits
+    max_daily_loss_usdc: Decimal = Decimal("50")   # Stop trading after this daily loss
+    max_drawdown_pct: Decimal = Decimal("10")       # Stop if portfolio drops X% from peak
+    max_consecutive_losses: int = 5                  # Pause after N consecutive losses
+    circuit_breaker_cooldown_minutes: int = 30       # How long to pause after breaker trips
+
+    # Position exit rules
+    profit_target_pct: Decimal = Decimal("5")        # Close at 5% profit
+    stop_loss_pct: Decimal = Decimal("3")             # Close at 3% loss
+    max_position_age_hours: float = 24.0              # Close after 24 hours
+    exit_check_interval_seconds: float = 15.0         # How often to check exits
+
+    # Order book depth
+    min_book_depth_usdc: Decimal = Decimal("10")     # Min liquidity to trade
+    verify_book_depth: bool = True                    # Enable depth checks
+
+    # Event-driven oracle
+    enable_oracle_sniping: bool = True
+    oracle_check_interval_seconds: float = 10.0
+    oracle_min_confidence: Decimal = Decimal("0.95")  # Only trade when very confident
+
+    # Dashboard
+    enable_dashboard: bool = False
+    dashboard_host: str = "127.0.0.1"
+    dashboard_port: int = 8050
+
+    # Copy / whale trading
+    enable_copy_trading: bool = False
+    whale_min_trade_usdc: Decimal = Decimal("1000")  # Min trade size to follow
+    whale_addresses: str = ""  # Comma-separated addresses
+
+    # Paper fill realism
+    paper_fill_probability: Decimal = Decimal("0.5")  # 50% fill chance for maker
+    paper_require_volume_cross: bool = True            # Require volume to cross price level
+
 
 def load_settings(env_file: str | None = None) -> Settings:
     """Load settings from .env and environment variables.
@@ -110,6 +149,45 @@ def load_settings(env_file: str | None = None) -> Settings:
         
         market_fetch_limit=int(os.getenv("MARKET_FETCH_LIMIT", "10000")),
         min_market_volume=Decimal(os.getenv("MIN_MARKET_VOLUME", "5000")),
+
+        # Fee modeling
+        taker_fee_rate=Decimal(os.getenv("TAKER_FEE_RATE", "0.02")),
+        maker_fee_rate=Decimal(os.getenv("MAKER_FEE_RATE", "0.005")),
+
+        # Circuit breaker
+        max_daily_loss_usdc=Decimal(os.getenv("MAX_DAILY_LOSS_USDC", "50")),
+        max_drawdown_pct=Decimal(os.getenv("MAX_DRAWDOWN_PCT", "10")),
+        max_consecutive_losses=int(os.getenv("MAX_CONSECUTIVE_LOSSES", "5")),
+        circuit_breaker_cooldown_minutes=int(os.getenv("CIRCUIT_BREAKER_COOLDOWN_MINUTES", "30")),
+
+        # Exit rules
+        profit_target_pct=Decimal(os.getenv("PROFIT_TARGET_PCT", "5")),
+        stop_loss_pct=Decimal(os.getenv("STOP_LOSS_PCT", "3")),
+        max_position_age_hours=float(os.getenv("MAX_POSITION_AGE_HOURS", "24.0")),
+        exit_check_interval_seconds=float(os.getenv("EXIT_CHECK_INTERVAL_SECONDS", "15.0")),
+
+        # Order book depth
+        min_book_depth_usdc=Decimal(os.getenv("MIN_BOOK_DEPTH_USDC", "10")),
+        verify_book_depth=parse_bool(os.getenv("VERIFY_BOOK_DEPTH"), True),
+
+        # Oracle
+        enable_oracle_sniping=parse_bool(os.getenv("ENABLE_ORACLE_SNIPING"), True),
+        oracle_check_interval_seconds=float(os.getenv("ORACLE_CHECK_INTERVAL_SECONDS", "10.0")),
+        oracle_min_confidence=Decimal(os.getenv("ORACLE_MIN_CONFIDENCE", "0.95")),
+
+        # Dashboard
+        enable_dashboard=parse_bool(os.getenv("ENABLE_DASHBOARD"), False),
+        dashboard_host=os.getenv("DASHBOARD_HOST", "127.0.0.1").strip(),
+        dashboard_port=int(os.getenv("DASHBOARD_PORT", "8050")),
+
+        # Copy trading
+        enable_copy_trading=parse_bool(os.getenv("ENABLE_COPY_TRADING"), False),
+        whale_min_trade_usdc=Decimal(os.getenv("WHALE_MIN_TRADE_USDC", "1000")),
+        whale_addresses=os.getenv("WHALE_ADDRESSES", ""),
+
+        # Paper fill realism
+        paper_fill_probability=Decimal(os.getenv("PAPER_FILL_PROBABILITY", "0.5")),
+        paper_require_volume_cross=parse_bool(os.getenv("PAPER_REQUIRE_VOLUME_CROSS"), True),
     )
 
 

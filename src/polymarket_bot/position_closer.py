@@ -48,9 +48,17 @@ class PositionCloser:
         self.position_manager = position_manager
         self.resolution_monitor = resolution_monitor
         
+        # Exit rule parameters from settings
+        self.profit_target_pct = settings.profit_target_pct / Decimal("100")
+        self.stop_loss_pct = settings.stop_loss_pct / Decimal("100")
+        self.max_position_age_seconds = settings.max_position_age_hours * 3600.0
+        
         # Statistics
         self.close_count = 0
         self.redemption_count = 0
+        self.profit_target_closes = 0
+        self.stop_loss_closes = 0
+        self.time_based_closes = 0
         self.total_realized_pnl = Decimal("0")
     
     def check_and_close_positions(self, price_data: dict[str, Decimal]) -> list[CloseResult]:
@@ -86,14 +94,76 @@ class PositionCloser:
     
     def _should_close_position(self, position: Position, price_data: dict[str, Decimal]) -> bool:
         """Determine if a position should be closed.
-        
-        Current logic:
-        - For arbitrage: Close when market resolves (handled by redeemable check)
-        - For guaranteed_win: Already at target (bought winning shares)
-        - For others: Could add profit target logic here
+
+        Exit rules (checked in order):
+        1. Stop loss: close if unrealized P&L drops below -stop_loss_pct
+        2. Profit target: close if unrealized P&L exceeds +profit_target_pct
+        3. Time-based: close if position age exceeds max_position_age
         """
-        # For now, only close via resolution
-        # Future: Add profit targets, stop losses, etc.
+        import time as _time
+
+        # Need price data for this token
+        current_price = price_data.get(position.token_id)
+        if current_price is None:
+            # Can't evaluate without price — check time-based exit only
+            if self.max_position_age_seconds > 0:
+                age = _time.time() - position.entry_time
+                if age > self.max_position_age_seconds:
+                    log.info(
+                        "⏰ TIME EXIT: %s aged %.1fh (max %.1fh) — closing",
+                        position.position_id,
+                        age / 3600,
+                        self.max_position_age_seconds / 3600,
+                    )
+                    self.time_based_closes += 1
+                    return True
+            return False
+
+        # Update unrealized P&L for this position
+        position.update_unrealized_pnl(current_price)
+
+        # Calculate return on cost basis
+        if position.cost_basis <= 0:
+            return False
+
+        return_pct = position.unrealized_pnl / position.cost_basis
+
+        # 1. Stop loss
+        if self.stop_loss_pct > 0 and return_pct <= -self.stop_loss_pct:
+            log.warning(
+                "🛑 STOP LOSS: %s return=%.2f%% (limit=-%.2f%%) — closing",
+                position.position_id,
+                float(return_pct * 100),
+                float(self.stop_loss_pct * 100),
+            )
+            self.stop_loss_closes += 1
+            return True
+
+        # 2. Profit target
+        if self.profit_target_pct > 0 and return_pct >= self.profit_target_pct:
+            log.info(
+                "🎯 PROFIT TARGET: %s return=%.2f%% (target=%.2f%%) — closing",
+                position.position_id,
+                float(return_pct * 100),
+                float(self.profit_target_pct * 100),
+            )
+            self.profit_target_closes += 1
+            return True
+
+        # 3. Time-based exit
+        if self.max_position_age_seconds > 0:
+            age = _time.time() - position.entry_time
+            if age > self.max_position_age_seconds:
+                log.info(
+                    "⏰ TIME EXIT: %s aged %.1fh (max %.1fh) return=%.2f%% — closing",
+                    position.position_id,
+                    age / 3600,
+                    self.max_position_age_seconds / 3600,
+                    float(return_pct * 100),
+                )
+                self.time_based_closes += 1
+                return True
+
         return False
     
     def close_position(self, position: Position, price_data: dict[str, Decimal]) -> CloseResult:
@@ -106,29 +176,12 @@ class PositionCloser:
         Returns:
             CloseResult with outcome
         """
-        if position.token_id not in price_data:
-            return CloseResult(
-                success=False,
-                position_id=position.position_id,
-                reason="no_price_data",
-                error=f"No price data for token {position.token_id}",
-            )
+        current_price = price_data.get(position.token_id)
+        if current_price is None:
+            # For time-based exits without price data, use entry price as fallback
+            current_price = position.entry_price
         
-        current_price = price_data[position.token_id]
-        
-        # Check if profitable
-        if current_price <= position.entry_price:
-            log.debug(
-                f"Position {position.position_id} not profitable yet: "
-                f"current=${current_price:.4f} entry=${position.entry_price:.4f}"
-            )
-            return CloseResult(
-                success=False,
-                position_id=position.position_id,
-                reason="not_profitable",
-            )
-        
-        # Execute sell
+        # Execute sell (regardless of profitability — exit rules already decided)
         if not is_live(self.settings):
             # Paper mode
             return self._paper_close(position, current_price)
@@ -294,5 +347,8 @@ class PositionCloser:
         return {
             "total_closes": self.close_count,
             "total_redemptions": self.redemption_count,
+            "profit_target_closes": self.profit_target_closes,
+            "stop_loss_closes": self.stop_loss_closes,
+            "time_based_closes": self.time_based_closes,
             "total_realized_pnl": float(self.total_realized_pnl),
         }

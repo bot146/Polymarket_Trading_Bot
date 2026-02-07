@@ -35,6 +35,7 @@ class ArbitrageStrategy(Strategy):
         max_order_usdc: Decimal = Decimal("20"),
         strict: bool = False,
         require_top_of_book: bool = False,
+        taker_fee_rate: Decimal = Decimal("0.02"),
         enabled: bool = True,
     ):
         super().__init__(name=name, enabled=enabled)
@@ -43,6 +44,7 @@ class ArbitrageStrategy(Strategy):
         self.max_order_usdc = max_order_usdc
         self.strict = strict
         self.require_top_of_book = require_top_of_book
+        self.taker_fee_rate = taker_fee_rate
 
     def scan(self, market_data: dict[str, Any]) -> list[StrategySignal]:
         """Scan for arbitrage opportunities in binary markets.
@@ -101,9 +103,11 @@ class ArbitrageStrategy(Strategy):
             yes_ask = Decimal(str(yes_ask))
             no_ask = Decimal(str(no_ask))
 
-            # Calculate edge
+            # Calculate edge (after fees)
             total_cost = yes_ask + no_ask
-            edge = Decimal("1") - total_cost
+            # Fees apply to both legs: taker_fee on YES buy + taker_fee on NO buy
+            total_fees = (yes_ask * self.taker_fee_rate) + (no_ask * self.taker_fee_rate)
+            edge = Decimal("1") - total_cost - total_fees
             edge_cents = edge * Decimal("100")
 
             min_edge_cents = self.min_edge_cents + (self.edge_buffer_cents if self.strict else Decimal("0"))
@@ -124,6 +128,8 @@ class ArbitrageStrategy(Strategy):
                             "yes_ask": float(yes_ask),
                             "no_ask": float(no_ask),
                             "edge_cents": float(edge_cents),
+                            "edge_cents_before_fees": float((Decimal("1") - total_cost) * 100),
+                            "total_fees_pct": float(self.taker_fee_rate * 2 * 100),
                             "min_edge_cents": float(min_edge_cents),
                             "strict": bool(self.strict),
                         },

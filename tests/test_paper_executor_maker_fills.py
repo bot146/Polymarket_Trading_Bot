@@ -8,7 +8,11 @@ from polymarket_bot.unified_executor import UnifiedExecutor
 
 def test_paper_executor_gtc_does_not_open_position_until_fill(tmp_path) -> None:
     pm = PositionManager(storage_path=str(tmp_path / "pos.json"))
-    ex = UnifiedExecutor(client=None, settings=Settings(kill_switch=False), position_manager=pm)
+    ex = UnifiedExecutor(
+        client=None,
+        settings=Settings(kill_switch=False, paper_fill_probability=Decimal("1.0"), paper_require_volume_cross=False),
+        position_manager=pm,
+    )
 
     signal = StrategySignal(
         opportunity=Opportunity(

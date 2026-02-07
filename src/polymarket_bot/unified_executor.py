@@ -14,9 +14,11 @@ from decimal import Decimal
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import OrderArgs
 
+from polymarket_bot.circuit_breaker import CircuitBreaker
 from polymarket_bot.config import Settings, is_live
 from polymarket_bot.hedge_scheduler import HedgeScheduler
 from polymarket_bot.inventory_hedger import InventoryHedger
+from polymarket_bot.order_book_depth import OrderBookDepthChecker
 from polymarket_bot.paper_trading import PaperBlotter, PaperFill
 from polymarket_bot.position_manager import PositionManager
 from polymarket_bot.strategy import Strategy, StrategySignal
@@ -57,7 +59,10 @@ class UnifiedExecutor:
         self.paper_trades_by_strategy: dict[str, dict] = {}
 
         # Paper-mode order blotter for maker orders.
-        self.paper_blotter = PaperBlotter()
+        self.paper_blotter = PaperBlotter(
+            fill_probability=float(self.settings.paper_fill_probability),
+            require_volume_cross=self.settings.paper_require_volume_cross,
+        )
 
         # Track fills/placements for basic realism metrics.
         self.paper_orders_placed = 0
@@ -77,6 +82,20 @@ class UnifiedExecutor:
             max_hedge_usdc=min(Decimal("10"), self.settings.max_order_usdc),
         )
         self.hedge_scheduler = HedgeScheduler(hedge_timeout_ms=self.settings.hedge_timeout_ms)
+
+        # Circuit breaker — halts trading after excessive losses.
+        self.circuit_breaker = CircuitBreaker(
+            max_daily_loss_usdc=self.settings.max_daily_loss_usdc,
+            max_drawdown_pct=self.settings.max_drawdown_pct,
+            max_consecutive_losses=self.settings.max_consecutive_losses,
+            cooldown_minutes=self.settings.circuit_breaker_cooldown_minutes,
+        )
+
+        # Order book depth checker — verify liquidity before executing.
+        self.depth_checker = OrderBookDepthChecker(
+            api_base=self.settings.poly_host,
+            min_depth_usdc=self.settings.min_book_depth_usdc,
+        )
 
     def execute_signal(
         self,
@@ -99,6 +118,15 @@ class UnifiedExecutor:
             return ExecutionResult(
                 success=False,
                 reason="kill_switch_enabled",
+                signal=signal,
+            )
+
+        # Circuit breaker check
+        if not self.circuit_breaker.allow_trading():
+            log.warning("🔴 Circuit breaker TRIPPED — blocking trade")
+            return ExecutionResult(
+                success=False,
+                reason="circuit_breaker_tripped",
                 signal=signal,
             )
 
@@ -224,6 +252,9 @@ class UnifiedExecutor:
 
             # Unknown order type: do nothing.
             continue
+
+        # Record theoretical PnL for circuit breaker.
+        self.circuit_breaker.record_trade_result(pnl=profit)
 
         log.warning(
             f"📄 PAPER TRADE [{strategy_type}]: "
@@ -562,6 +593,24 @@ class UnifiedExecutor:
                 if open_cost > self.settings.max_inventory_usdc_per_condition:
                     return False, "max_inventory_usdc_per_condition"
 
+        # Order book depth check (skip for paper-only to avoid API calls).
+        if self.settings.verify_book_depth and is_live(self.settings):
+            for trade in signal.trades:
+                depth_ok = self.depth_checker.check_depth(
+                    token_id=trade.token_id,
+                    side=trade.side,
+                    required_size=trade.size,
+                    limit_price=trade.price,
+                )
+                if not depth_ok.sufficient:
+                    log.warning(
+                        "📉 Insufficient book depth for %s %s (have $%.2f, need $%.2f)",
+                        trade.side, trade.token_id[:8],
+                        float(depth_ok.available_notional),
+                        float(self.settings.min_book_depth_usdc),
+                    )
+                    return False, "insufficient_book_depth"
+
         # Maker open order cap (paper mode only).
         # We treat any signal that submits GTC as "maker".
         condition_id = signal.opportunity.metadata.get("condition_id")
@@ -721,6 +770,7 @@ class UnifiedExecutor:
                 "open_gtc_total": sum(open_gtc_by_condition.values()),
                 "open_gtc_by_condition": open_gtc_by_condition,
             },
+            "circuit_breaker": self.circuit_breaker.get_stats(),
         }
         
         # Add portfolio stats if position manager available

@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import Any, cast
 
 from polymarket_bot.orchestrator import OrchestratorConfig, StrategyOrchestrator
@@ -50,6 +51,16 @@ class _Settings:
     edge_buffer_cents = 0
     max_order_usdc = 5
     min_market_volume = 0
+    # fee rates used by strategy constructors
+    maker_fee_rate = Decimal("0")
+    taker_fee_rate = Decimal("0")
+    # oracle sniping
+    enable_oracle_sniping = False
+    oracle_min_confidence = Decimal("0.7")
+    # copy trading
+    enable_copy_trading = False
+    whale_min_trade_usdc = Decimal("500")
+    whale_addresses = ""
 
 
 def test_orchestrator_prefers_wss_best_ask_over_gamma_price(monkeypatch):

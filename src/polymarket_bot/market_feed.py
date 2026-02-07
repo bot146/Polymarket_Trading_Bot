@@ -58,11 +58,23 @@ class EnhancedMarketFeed:
         
         Returns:
             Dict with bid/ask data for all tracked assets.
+
+        Thread-safety:
+            The underlying ``MarketWssClient`` mutates ``best_bid`` / ``best_ask``
+            dicts from the WebSocket reader thread.  We take a snapshot under the
+            lock to avoid torn reads.
         """
         with self._lock:
-            # Sync from underlying WSS client
-            self.best_bid.update(self.wss.best_bid)
-            self.best_ask.update(self.wss.best_ask)
+            # Snapshot the dicts atomically (dict.copy is fast).
+            try:
+                raw_bid = dict(self.wss.best_bid)
+                raw_ask = dict(self.wss.best_ask)
+            except Exception:
+                raw_bid = {}
+                raw_ask = {}
+
+            self.best_bid.update(raw_bid)
+            self.best_ask.update(raw_ask)
             
             # Calculate mid prices and spreads
             for asset_id in self.asset_ids:
@@ -89,20 +101,28 @@ class EnhancedMarketFeed:
 
     def is_data_ready(self, asset_id: str) -> bool:
         """Check if we have valid bid/ask data for an asset."""
-        return (
-            asset_id in self.best_bid and
-            asset_id in self.best_ask and
-            self.best_bid[asset_id] is not None and
-            self.best_ask[asset_id] is not None
-        )
+        with self._lock:
+            return (
+                asset_id in self.best_bid and
+                asset_id in self.best_ask and
+                self.best_bid[asset_id] is not None and
+                self.best_ask[asset_id] is not None
+            )
 
     def get_spread_bps(self, asset_id: str) -> float | None:
         """Get spread in basis points for an asset."""
-        if not self.is_data_ready(asset_id):
-            return None
-        
-        bid = self.best_bid[asset_id]
-        ask = self.best_ask[asset_id]
+        with self._lock:
+            if not (
+                asset_id in self.best_bid and
+                asset_id in self.best_ask and
+                self.best_bid[asset_id] is not None and
+                self.best_ask[asset_id] is not None
+            ):
+                return None
+
+            bid = self.best_bid[asset_id]
+            ask = self.best_ask[asset_id]
+
         mid = (bid + ask) / 2
         
         if mid <= 0:

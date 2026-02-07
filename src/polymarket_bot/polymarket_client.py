@@ -13,7 +13,20 @@ import requests
 import httpx
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import OrderArgs, MarketOrderArgs, OrderType
-from config import Config
+
+# Backwards-compatible Config import: try the legacy bare `config` module first
+# (used by archive/mirror_trading), then fall back to the new package path.
+try:
+    from config import Config  # type: ignore[import-untyped]
+except ImportError:
+    # Provide a minimal Config stub so polymarket_client.py keeps working
+    # without the legacy config.py file sitting on sys.path.
+    class Config:  # type: ignore[no-redef]
+        POLYMARKET_API_URL = "https://clob.polymarket.com"
+        DATA_API_FIRST = True
+        DISABLE_CLOB_TRADE_FETCH = False
+        MIRROR_SIGNATURE_TYPE = -1
+        MIRROR_FUNDER_ADDRESS = ""
 
 logger = logging.getLogger(__name__)
 

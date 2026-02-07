@@ -17,6 +17,7 @@ from decimal import Decimal as _Decimal
 
 from polymarket_bot.clob_client import build_clob_client
 from polymarket_bot.config import load_settings
+from polymarket_bot.dashboard import Dashboard
 from polymarket_bot.logging import setup_logging
 from polymarket_bot.orchestrator import OrchestratorConfig, StrategyOrchestrator
 from polymarket_bot.position_closer import PositionCloser
@@ -166,6 +167,18 @@ def print_stats(
             f"requoted={po.get('requoted', 0)}"
         )
 
+    # Circuit breaker status
+    cb = exec_stats.get("circuit_breaker") or {}
+    if isinstance(cb, dict):
+        log.info("─" * 70)
+        log.info(
+            f"🔌 CIRCUIT BREAKER: state={cb.get('state', 'unknown')} "
+            f"daily_loss=${cb.get('daily_loss', 0):.2f} "
+            f"drawdown={cb.get('drawdown_pct', 0):.1f}% "
+            f"consec_losses={cb.get('consecutive_losses', 0)} "
+            f"trips={cb.get('total_trips', 0)}"
+        )
+
     # Strategy attribution (actual P&L)
     if "portfolio" in exec_stats:
         portfolio = exec_stats["portfolio"]
@@ -256,6 +269,20 @@ def main() -> None:
     orchestrator = StrategyOrchestrator(settings, orch_config)
     executor = UnifiedExecutor(client, settings, position_manager=position_manager)
     
+    # Start dashboard if enabled
+    dashboard: Dashboard | None = None
+    if settings.enable_dashboard:
+        try:
+            dashboard = Dashboard(
+                host=settings.dashboard_host,
+                port=settings.dashboard_port,
+                executor=executor,
+                orchestrator=orchestrator,
+            )
+            dashboard.start()
+        except Exception as e:
+            log.warning("⚠️  Dashboard failed to start: %s", e)
+
     log.info("🚀 Bot initialized with full trade lifecycle. Starting main loop...")
     
     # Main loop
@@ -278,9 +305,22 @@ def main() -> None:
                 last_resolution_check = loop_start
             
             # Check and close positions
-            if loop_start - last_position_close_check >= 30:  # Every 30 seconds
-                # Get current price data (would need to fetch from market)
-                price_data = {}  # TODO: Fetch current prices
+            if loop_start - last_position_close_check >= settings.exit_check_interval_seconds:
+                # Build price_data from live top-of-book feed
+                tob_snap = orchestrator.get_top_of_book_snapshot()
+                price_data: dict[str, _Decimal] = {}
+                # Use mid-price (avg of bid/ask) for P&L; fallback to ask if no bid
+                bid_map = tob_snap.get("best_bid", {})
+                ask_map = tob_snap.get("best_ask", {})
+                for tid in set(bid_map.keys()) | set(ask_map.keys()):
+                    bid_v = bid_map.get(tid)
+                    ask_v = ask_map.get(tid)
+                    if bid_v is not None and ask_v is not None:
+                        price_data[tid] = (_Decimal(str(bid_v)) + _Decimal(str(ask_v))) / 2
+                    elif ask_v is not None:
+                        price_data[tid] = _Decimal(str(ask_v))
+                    elif bid_v is not None:
+                        price_data[tid] = _Decimal(str(bid_v))
                 close_results = position_closer.check_and_close_positions(price_data)
                 if close_results:
                     successful_closes = [r for r in close_results if r.success]

@@ -30,7 +30,8 @@ def test_arbitrage_strategy_finds_opportunity():
     """Test that arbitrage opportunities are found."""
     strategy = ArbitrageStrategy(
         min_edge_cents=Decimal("1.5"),
-        max_order_usdc=Decimal("20")
+        max_order_usdc=Decimal("20"),
+        taker_fee_rate=Decimal("0"),
     )
     
     market_data = {
@@ -84,7 +85,7 @@ def test_arbitrage_strategy_edge_below_threshold():
 
 def test_arbitrage_strategy_validation():
     """Test signal validation."""
-    strategy = ArbitrageStrategy()
+    strategy = ArbitrageStrategy(taker_fee_rate=Decimal("0"))
     
     market_data = {
         "markets": [
