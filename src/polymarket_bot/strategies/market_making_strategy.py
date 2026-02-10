@@ -40,7 +40,7 @@ log = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class MarketMakingConfig:
     # Minimum spread bps required to quote (avoid tight markets where we just churn).
-    min_spread_bps: Decimal = Decimal("20")
+    min_spread_bps: Decimal = Decimal("10")
 
     # How far inside the spread we quote, in bps.
     # Example: 5 bps means we improve best bid by 5 bps and improve best ask by 5 bps.

@@ -143,9 +143,9 @@ class StatisticalArbitrageStrategy(Strategy):
     def __init__(
         self,
         name: str = "statistical_arbitrage",
-        lookback: int = 30,
-        z_entry: float = 2.0,
-        min_correlation: float = 0.60,
+        lookback: int = 15,
+        z_entry: float = 1.5,
+        min_correlation: float = 0.50,
         max_order_usdc: Decimal = Decimal("30"),
         maker_fee_rate: Decimal = Decimal("0.005"),
         enabled: bool = True,

@@ -263,7 +263,12 @@ def main() -> None:
         max_concurrent_trades=5,
         enable_arbitrage=True,
         enable_guaranteed_win=True,
-        enable_stat_arb=False,  # Disabled by default - more complex
+        enable_multi_outcome_arb=True,  # Buy all YES tokens in a group for < $1
+        # Speculative strategies disabled — focus on guaranteed-profit only
+        enable_stat_arb=False,
+        enable_value_betting=False,
+        enable_sniping=False,
+        enable_market_making=False,
     )
     
     orchestrator = StrategyOrchestrator(settings, orch_config)
@@ -336,7 +341,15 @@ def main() -> None:
             if settings.trading_mode == "paper":
                 tob = orchestrator.get_top_of_book_snapshot()
                 best_bid_map = tob.get("best_bid", {})
-                best_ask_map = tob.get("best_ask", {})
+                best_ask_map = dict(tob.get("best_ask", {}))
+
+                # Merge CLOB cache into ask map so paper FOK fills can see
+                # executable ask prices for negRisk tokens.
+                clob_cache = getattr(orchestrator, "_clob_cache", {})
+                for tid, price in clob_cache.items():
+                    if tid not in best_ask_map or best_ask_map.get(tid) is None:
+                        best_ask_map[tid] = price
+
                 if best_bid_map or best_ask_map:
                     token_ids = set(best_bid_map.keys()) | set(best_ask_map.keys())
                     for token_id in token_ids:

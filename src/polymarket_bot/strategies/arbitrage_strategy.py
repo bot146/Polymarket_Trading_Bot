@@ -30,7 +30,7 @@ class ArbitrageStrategy(Strategy):
     def __init__(
         self,
         name: str = "arbitrage",
-        min_edge_cents: Decimal = Decimal("1.5"),
+        min_edge_cents: Decimal = Decimal("0.5"),
         edge_buffer_cents: Decimal = Decimal("0"),
         max_order_usdc: Decimal = Decimal("20"),
         strict: bool = False,

@@ -198,6 +198,11 @@ class UnifiedExecutor:
                 best_bid, best_ask = self.paper_blotter.get_last_top_of_book(token_id=t.token_id)
                 if t.side == "BUY":
                     if best_ask is None or best_ask > t.price:
+                        log.debug(
+                            "📄 FOK not marketable: token=%s side=%s limit=%.4f best_ask=%s",
+                            t.token_id[:12], t.side, t.price,
+                            f"{best_ask:.4f}" if best_ask is not None else "None",
+                        )
                         return ExecutionResult(success=False, reason="paper_fok_not_marketable", signal=signal)
                 else:  # SELL
                     if best_bid is None or best_bid < t.price:

@@ -43,6 +43,8 @@ class MarketInfo:
     closed: bool
     resolved: bool
     winning_outcome: str | None = None
+    neg_risk_market_id: str | None = None  # Shared ID for multi-outcome groups
+    group_item_title: str | None = None  # Bracket label (e.g. "250-500k")
 
 
 @dataclass(frozen=True)
@@ -105,7 +107,10 @@ class MarketScanner:
                 fetch_limit = DEFAULT_FETCH_LIMIT
             
             # Gamma API endpoint for markets
-            response = self._get("/markets", params={"limit": fetch_limit, "active": active_only})
+            params: dict = {"limit": fetch_limit, "active": active_only}
+            if active_only:
+                params["closed"] = False  # Exclude resolved / settled markets
+            response = self._get("/markets", params=params)
             
             markets = []
             parse_errors = 0
@@ -229,30 +234,73 @@ class MarketScanner:
         return crypto_markets
 
     def _parse_market(self, data: dict[str, Any]) -> MarketInfo:
-        """Parse market data from API response."""
-        # Parse tokens
-        tokens = []
-        tokens_data = data.get("tokens", [])
-        
-        for token_data in tokens_data:
-            tokens.append(TokenInfo(
-                token_id=str(token_data.get("token_id", "")),
-                outcome=str(token_data.get("outcome", "")),
-                price=Decimal(str(token_data.get("price", 0))),
-                volume=Decimal(str(token_data.get("volume", 0))),
-            ))
+        """Parse market data from Gamma API response.
+
+        The Gamma API uses camelCase field names and encodes token data as
+        JSON-stringified arrays in separate fields:
+        - ``conditionId`` (str): market condition identifier
+        - ``outcomes`` (JSON str): e.g. '["Yes", "No"]'
+        - ``outcomePrices`` (JSON str): e.g. '["0.55", "0.45"]'
+        - ``clobTokenIds`` (JSON str): e.g. '["abc123...", "def456..."]'
+        """
+        import json as _json
+
+        # Parse token data from the three parallel JSON arrays
+        tokens: list[TokenInfo] = []
+        try:
+            outcomes_raw = data.get("outcomes") or "[]"
+            prices_raw = data.get("outcomePrices") or "[]"
+            token_ids_raw = data.get("clobTokenIds") or "[]"
+
+            outcomes = _json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else outcomes_raw
+            prices = _json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
+            token_ids = _json.loads(token_ids_raw) if isinstance(token_ids_raw, str) else token_ids_raw
+
+            # Also pull per-token volume from the newer ``tokens`` field if present
+            tokens_extra: list[dict] = data.get("tokens", []) or []
+            volume_by_id: dict[str, Decimal] = {}
+            for tex in tokens_extra:
+                if isinstance(tex, dict):
+                    tid = str(tex.get("token_id", ""))
+                    vol = tex.get("volume", 0)
+                    if tid:
+                        volume_by_id[tid] = Decimal(str(vol))
+
+            for i, outcome in enumerate(outcomes):
+                token_id = str(token_ids[i]) if i < len(token_ids) else ""
+                price = Decimal(str(prices[i])) if i < len(prices) else Decimal("0")
+                volume = volume_by_id.get(token_id, Decimal("0"))
+                tokens.append(TokenInfo(
+                    token_id=token_id,
+                    outcome=str(outcome),
+                    price=price,
+                    volume=volume,
+                ))
+        except Exception as e:
+            log.debug("Token parsing fallback for market %s: %s", data.get("conditionId", "?")[:12], e)
+
+        # Use total market volume as fallback for per-token volume
+        market_volume = Decimal(str(data.get("volume", 0)))
+        if tokens and all(t.volume == 0 for t in tokens):
+            per_token = market_volume / len(tokens) if len(tokens) > 0 else Decimal("0")
+            tokens = [
+                TokenInfo(token_id=t.token_id, outcome=t.outcome, price=t.price, volume=per_token)
+                for t in tokens
+            ]
 
         return MarketInfo(
-            condition_id=str(data.get("condition_id", "")),
+            condition_id=str(data.get("conditionId") or data.get("condition_id") or ""),
             question=str(data.get("question", "")),
-            end_date=data.get("end_date_iso"),
+            end_date=data.get("endDateIso") or data.get("end_date_iso"),
             tokens=tokens,
-            volume=Decimal(str(data.get("volume", 0))),
+            volume=market_volume,
             liquidity=Decimal(str(data.get("liquidity", 0))),
             active=bool(data.get("active", True)),
             closed=bool(data.get("closed", False)),
             resolved=bool(data.get("resolved", False)),
             winning_outcome=data.get("winning_outcome"),
+            neg_risk_market_id=data.get("negRiskMarketID") or data.get("neg_risk_market_id"),
+            group_item_title=data.get("groupItemTitle") or data.get("group_item_title"),
         )
 
     def refresh_cache(self, force: bool = False) -> None:

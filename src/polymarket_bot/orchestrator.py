@@ -13,15 +13,18 @@ from typing import Any
 
 from polymarket_bot.config import Settings
 from polymarket_bot.market_feed import EnhancedMarketFeed
+from polymarket_bot.order_book_depth import OrderBookDepthChecker
 from polymarket_bot.scanner import MarketScanner
 from polymarket_bot.strategy import StrategyRegistry, StrategySignal
 from polymarket_bot.strategies.arbitrage_strategy import ArbitrageStrategy
 from polymarket_bot.strategies.copy_trading_strategy import CopyTradingStrategy
 from polymarket_bot.strategies.guaranteed_win_strategy import GuaranteedWinStrategy
 from polymarket_bot.strategies.market_making_strategy import MarketMakingConfig, MarketMakingStrategy
+from polymarket_bot.strategies.multi_outcome_arb_strategy import MultiOutcomeArbStrategy
 from polymarket_bot.strategies.oracle_sniping_strategy import OracleSnipingStrategy
 from polymarket_bot.strategies.sniping_strategy import SnipingConfig, SnipingStrategy
 from polymarket_bot.strategies.statistical_arbitrage_strategy import StatisticalArbitrageStrategy
+from polymarket_bot.strategies.value_betting_strategy import ValueBettingConfig, ValueBettingStrategy
 
 log = logging.getLogger(__name__)
 
@@ -33,11 +36,13 @@ class OrchestratorConfig:
     max_concurrent_trades: int = 5  # Max number of simultaneous positions
     enable_arbitrage: bool = True
     enable_guaranteed_win: bool = True
-    enable_stat_arb: bool = False  # More complex, disabled by default
-    enable_sniping: bool = True
-    enable_market_making: bool = True
-    enable_oracle_sniping: bool = True
+    enable_stat_arb: bool = False  # Speculative — disabled
+    enable_sniping: bool = False  # Speculative — disabled
+    enable_market_making: bool = False  # Speculative — disabled
+    enable_oracle_sniping: bool = False  # Speculative — disabled
     enable_copy_trading: bool = False
+    enable_value_betting: bool = False  # Speculative (Kelly) — disabled
+    enable_multi_outcome_arb: bool = True  # Buy all YES in a group for < $1
     
     # Market scanning
     scan_high_volume: bool = True
@@ -152,6 +157,22 @@ class StrategyOrchestrator:
             self.registry.register(copy_strategy)
             log.info("Registered: CopyTradingStrategy (whale_addrs=%d)", len(whale_addrs))
 
+        if self.config.enable_value_betting:
+            vb_config = ValueBettingConfig(maker_fee_rate=self.settings.maker_fee_rate)
+            vb_strategy = ValueBettingStrategy(config=vb_config, enabled=True)
+            self.registry.register(vb_strategy)
+            log.info("Registered: ValueBettingStrategy (ensemble edge detection)")
+
+        if self.config.enable_multi_outcome_arb:
+            mo_arb_strategy = MultiOutcomeArbStrategy(
+                min_edge_cents=self.settings.min_edge_cents,
+                max_order_usdc=self.settings.max_order_usdc,
+                taker_fee_rate=self.settings.taker_fee_rate,
+                enabled=True,
+            )
+            self.registry.register(mo_arb_strategy)
+            log.info("Registered: MultiOutcomeArbStrategy")
+
     def scan_and_collect_signals(self) -> list[StrategySignal]:
         """Scan markets and collect signals from all strategies."""
         market_data = self._gather_market_data()
@@ -244,7 +265,29 @@ class StrategyOrchestrator:
                         feed_snapshot = {}
                 best_bid_map: dict[str, float] = feed_snapshot.get("best_bid", {}) if isinstance(feed_snapshot, dict) else {}
                 best_ask_map: dict[str, float] = feed_snapshot.get("best_ask", {}) if isinstance(feed_snapshot, dict) else {}
-                
+
+                # When the WSS feed isn't connected, best_ask falls back to the
+                # Gamma mid-price.  For arbitrage strategies (binary and multi-
+                # outcome) we need *executable* ask prices from the CLOB order
+                # book.  Fetch books for tokens that don't have WSS data.
+                clob_best_ask_map: dict[str, float] = {}
+                if self.config.enable_arbitrage or self.config.enable_multi_outcome_arb:
+                    clob_best_ask_map = self._fetch_clob_best_asks(
+                        high_vol_markets, best_ask_map
+                    )
+
+                # Merge: WSS → CLOB → Gamma (priority order)
+                def _resolve_best_ask(token_id: str, gamma_price: float) -> float:
+                    tid = str(token_id)
+                    # 1. WSS feed (most accurate)
+                    if tid in best_ask_map and best_ask_map[tid] is not None:
+                        return float(best_ask_map[tid])
+                    # 2. CLOB order book (executable)
+                    if tid in clob_best_ask_map and clob_best_ask_map[tid] is not None:
+                        return float(clob_best_ask_map[tid])
+                    # 3. Gamma mid-price (fallback)
+                    return gamma_price
+
                 # Convert to dict format for strategies
                 for market in high_vol_markets:
                     market_dict = {
@@ -252,22 +295,19 @@ class StrategyOrchestrator:
                         "question": market.question,
                         "volume": float(market.volume),
                         "active": market.active,
+                        "neg_risk_market_id": market.neg_risk_market_id,
+                        "group_item_title": market.group_item_title,
                         "tokens": [
                             {
                                 "token_id": token.token_id,
                                 "outcome": token.outcome,
                                 "price": float(token.price),
-                                # Prefer executable top-of-book prices; fall back to Gamma if missing.
                                 "best_bid": (
                                     float(best_bid_map[str(token.token_id)])
                                     if str(token.token_id) in best_bid_map and best_bid_map[str(token.token_id)] is not None
-                                    else None
-                                ),
-                                "best_ask": (
-                                    float(best_ask_map[str(token.token_id)])
-                                    if str(token.token_id) in best_ask_map and best_ask_map[str(token.token_id)] is not None
                                     else float(token.price)
                                 ),
+                                "best_ask": _resolve_best_ask(token.token_id, float(token.price)),
                                 "volume": float(token.volume),
                             }
                             for token in market.tokens
@@ -382,3 +422,118 @@ class StrategyOrchestrator:
             }
         except Exception:
             return {"best_bid": {}, "best_ask": {}}
+
+    # ------------------------------------------------------------------
+    # CLOB order-book helpers
+    # ------------------------------------------------------------------
+
+    _CLOB_API_BASE = "https://clob.polymarket.com"
+    _clob_cache: dict[str, float] = {}       # token_id → best_ask price
+    _clob_cache_ts: float = 0.0              # epoch of last fetch
+    _CLOB_CACHE_TTL: float = 60.0            # re-fetch every 60 s
+
+    def _fetch_clob_best_asks(
+        self,
+        markets: list,
+        already_have: dict[str, float],
+    ) -> dict[str, float]:
+        """Fetch best-ask prices from the CLOB order book for tokens that
+        don't already have WSS data.
+
+        Only fetches books for **negRisk** markets (multi-outcome arb
+        candidates).  Binary YES+NO arb is empirically dead after the 2%
+        taker fee, so we skip those to avoid hundreds of unnecessary HTTP
+        calls on every scan cycle.
+
+        Results are cached for ``_CLOB_CACHE_TTL`` seconds to avoid
+        hammering the API every 2-second scan cycle.  Uses a
+        ``ThreadPoolExecutor`` for parallel fetching.
+
+        CLOB book asks are sorted **descending** — the best (lowest) ask
+        is the *last* element in the list.
+
+        Returns:
+            {token_id: best_ask_price} for successfully fetched tokens.
+        """
+        import time as _time
+        import requests as _requests
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # --- Cache check: return cached data if still fresh ----------------
+        now = _time.time()
+        if self._clob_cache and (now - self._clob_cache_ts) < self._CLOB_CACHE_TTL:
+            # Return cached prices (excluding tokens the WSS already covers)
+            return {k: v for k, v in self._clob_cache.items() if k not in already_have}
+
+        # --- Build list of tokens that need CLOB data ----------------------
+        tokens_to_fetch: list[str] = []
+
+        for m in markets:
+            # Only fetch for multi-outcome (negRisk) arb candidates.
+            if not m.neg_risk_market_id:
+                continue
+            for t in m.tokens:
+                tid = str(t.token_id)
+                if tid and tid not in already_have:
+                    tokens_to_fetch.append(tid)
+
+        # Deduplicate, preserve order
+        tokens_to_fetch = list(dict.fromkeys(tokens_to_fetch))
+
+        if not tokens_to_fetch:
+            return {}
+
+        log.info("📖 Fetching CLOB books for %d negRisk tokens (concurrent, TTL=%ds)...",
+                 len(tokens_to_fetch), int(self._CLOB_CACHE_TTL))
+
+        errors: dict[str, int] = {}  # error type → count
+        adapter = _requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
+        sess = _requests.Session()
+        sess.mount("https://", adapter)
+
+        def _fetch_one(tid: str) -> tuple[str, float | None]:
+            try:
+                resp = sess.get(
+                    f"{self._CLOB_API_BASE}/book",
+                    params={"token_id": tid},
+                    timeout=5.0,
+                )
+                resp.raise_for_status()
+                book = resp.json()
+                asks = book.get("asks", [])
+                if asks:
+                    # Asks are sorted descending — best (lowest) is last
+                    best_ask_raw = asks[-1]
+                    price = float(best_ask_raw.get("price", 0) if isinstance(best_ask_raw, dict) else best_ask_raw[0])
+                    if price > 0:
+                        return (tid, price)
+            except _requests.exceptions.HTTPError as e:
+                err_key = f"HTTP {e.response.status_code}" if e.response is not None else "HTTP ?"
+                errors[err_key] = errors.get(err_key, 0) + 1
+            except _requests.exceptions.Timeout:
+                errors["timeout"] = errors.get("timeout", 0) + 1
+            except Exception as e:
+                err_key = type(e).__name__
+                errors[err_key] = errors.get(err_key, 0) + 1
+            return (tid, None)
+
+        result: dict[str, float] = {}
+        fetched = 0
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            futures = {pool.submit(_fetch_one, tid): tid for tid in tokens_to_fetch}
+            for future in as_completed(futures):
+                tid, price = future.result()
+                if price is not None:
+                    result[tid] = price
+                    fetched += 1
+
+        # Update cache
+        self._clob_cache = dict(result)
+        self._clob_cache_ts = _time.time()
+
+        log.info("📖 CLOB books: fetched %d/%d best-ask prices (%.1fs)",
+                 fetched, len(tokens_to_fetch), self._clob_cache_ts - now)
+        if errors:
+            log.warning("📖 CLOB fetch errors: %s", errors)
+
+        return result

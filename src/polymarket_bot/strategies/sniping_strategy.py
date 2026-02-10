@@ -39,10 +39,10 @@ class SnipingConfig:
     """
 
     # minimum spread to consider, in basis points (bps). 100 bps = 1%
-    min_spread_bps: Decimal = Decimal("75")
+    min_spread_bps: Decimal = Decimal("30")
 
     # require the buy price to be X bps below mid (i.e. we "snipe" cheap)
-    min_discount_to_mid_bps: Decimal = Decimal("25")
+    min_discount_to_mid_bps: Decimal = Decimal("10")
 
     # absolute max we will pay for any single share
     max_entry_price: Decimal = Decimal("0.99")

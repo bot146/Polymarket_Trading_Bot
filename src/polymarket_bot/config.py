@@ -23,7 +23,7 @@ class Settings:
 
     # Risk
     max_order_usdc: Decimal = Decimal("20")
-    min_edge_cents: Decimal = Decimal("1.5")
+    min_edge_cents: Decimal = Decimal("0.5")
 
     # Execution profile
     # - hard_guarantee: hedge immediately on any imbalance; prefer taker/atomic style
@@ -41,7 +41,7 @@ class Settings:
 
     # Arbitrage scanning
     # Extra cushion for fees/slippage/leg risk.
-    edge_buffer_cents: Decimal = Decimal("0.5")
+    edge_buffer_cents: Decimal = Decimal("0.2")
 
     # Data API settings
     data_api_first: bool = True
@@ -53,7 +53,7 @@ class Settings:
     
     # Market scanning settings
     market_fetch_limit: int = 10000  # Max markets to fetch from API (0 = use DEFAULT_FETCH_LIMIT)
-    min_market_volume: Decimal = Decimal("5000")  # Minimum volume threshold in USDC
+    min_market_volume: Decimal = Decimal("1000")  # Minimum volume threshold in USDC
 
     # Fee modeling
     taker_fee_rate: Decimal = Decimal("0.02")    # 2% taker fee
@@ -127,8 +127,8 @@ def load_settings(env_file: str | None = None) -> Settings:
         kill_switch=kill_switch,
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper(),
         max_order_usdc=Decimal(os.getenv("MAX_ORDER_USDC", "20")),
-        min_edge_cents=Decimal(os.getenv("MIN_EDGE_CENTS", "1.5")),
-        edge_buffer_cents=Decimal(os.getenv("EDGE_BUFFER_CENTS", "0.5")),
+        min_edge_cents=Decimal(os.getenv("MIN_EDGE_CENTS", "0.5")),
+        edge_buffer_cents=Decimal(os.getenv("EDGE_BUFFER_CENTS", "0.2")),
 
         execution_profile=os.getenv("EXECUTION_PROFILE", "aggressive_maker").strip().lower(),
         hedge_timeout_ms=int(os.getenv("HEDGE_TIMEOUT_MS", "1200")),
@@ -148,7 +148,7 @@ def load_settings(env_file: str | None = None) -> Settings:
         cloudflare_block_cooldown_seconds=int(os.getenv("CLOUDFLARE_BLOCK_COOLDOWN_SECONDS", "600")),
         
         market_fetch_limit=int(os.getenv("MARKET_FETCH_LIMIT", "10000")),
-        min_market_volume=Decimal(os.getenv("MIN_MARKET_VOLUME", "5000")),
+        min_market_volume=Decimal(os.getenv("MIN_MARKET_VOLUME", "1000")),
 
         # Fee modeling
         taker_fee_rate=Decimal(os.getenv("TAKER_FEE_RATE", "0.02")),

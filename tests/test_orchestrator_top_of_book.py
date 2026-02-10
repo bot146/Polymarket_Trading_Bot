@@ -19,6 +19,8 @@ class _FakeMarket:
         self.tokens = tokens
         self.volume = volume
         self.active = active
+        self.neg_risk_market_id = None
+        self.group_item_title = None
 
 
 class _FakeScanner:
@@ -113,4 +115,6 @@ def test_orchestrator_falls_back_to_gamma_price_when_no_best_ask(monkeypatch):
     data = orch._gather_market_data()
     t1 = data["markets"][0]["tokens"][0]
     assert t1["best_ask"] == 0.55
-    assert t1["best_bid"] is None
+    # best_bid now also falls back to Gamma price (same as best_ask) so strategies
+    # that require both sides (market-making, sniping) aren't starved.
+    assert t1["best_bid"] == 0.55

@@ -23,6 +23,7 @@ class StrategyType(str, Enum):
     SPREAD_FARMING = "spread_farming"
     COPY_TRADING = "copy_trading"
     AI_PROBABILITY = "ai_probability"
+    MULTI_OUTCOME_ARB = "multi_outcome_arb"
 
 
 @dataclass(frozen=True)
