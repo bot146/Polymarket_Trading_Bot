@@ -14,6 +14,7 @@ it harder for the market to keep every ask perfectly efficient.
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
 from decimal import Decimal
 from typing import Any
@@ -58,6 +59,8 @@ class MultiOutcomeArbStrategy(Strategy):
         self.min_edge_cents = min_edge_cents
         self.max_order_usdc = max_order_usdc
         self.taker_fee_rate = taker_fee_rate
+        self._signal_cooldown: dict[str, float] = {}  # group_id → last signal epoch
+        self._cooldown_seconds: float = 120.0          # don't re-signal same group within 2 min
 
     def scan(self, market_data: dict[str, Any]) -> list[StrategySignal]:
         """Scan for multi-outcome arb across negRisk grouped markets.
@@ -81,8 +84,14 @@ class MultiOutcomeArbStrategy(Strategy):
                 groups[nrid].append(m)
 
         # 2. Evaluate each group
+        now = time.time()
         for group_id, brackets in groups.items():
             if len(brackets) < MIN_BRACKETS:
+                continue
+
+            # Cooldown: skip groups we recently signaled
+            last_signal = self._signal_cooldown.get(group_id, 0)
+            if now - last_signal < self._cooldown_seconds:
                 continue
 
             # Collect YES token info for each bracket
@@ -200,6 +209,7 @@ class MultiOutcomeArbStrategy(Strategy):
                 min_expected_return=size,  # Exactly one bracket pays $1/share
             )
             signals.append(signal)
+            self._signal_cooldown[group_id] = now
 
         return signals
 

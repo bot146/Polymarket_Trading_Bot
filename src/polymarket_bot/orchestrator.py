@@ -204,7 +204,7 @@ class StrategyOrchestrator:
             # Skip if we already have a position in this market
             condition_id = signal.opportunity.metadata.get("condition_id")
             if condition_id and condition_id in self.active_positions:
-                log.debug(f"Skipping {condition_id[:8]}... - already have position")
+                log.info(f"⏭️  Skipping {condition_id[:12]}... — already have active position")
                 continue
             
             # Check concurrent trade limit
@@ -272,19 +272,20 @@ class StrategyOrchestrator:
                 # book.  Fetch books for tokens that don't have WSS data.
                 clob_best_ask_map: dict[str, float] = {}
                 if self.config.enable_arbitrage or self.config.enable_multi_outcome_arb:
-                    clob_best_ask_map = self._fetch_clob_best_asks(
-                        high_vol_markets, best_ask_map
-                    )
+                    clob_best_ask_map = self._fetch_clob_best_asks(high_vol_markets)
 
-                # Merge: WSS → CLOB → Gamma (priority order)
+                # Merge: CLOB → WSS → Gamma (priority order for best_ask)
+                # For negRisk tokens the CLOB book gives the real executable ask,
+                # which is what multi-outcome arb needs. WSS mid-prices are useful
+                # for speculative strategies but can mask arb edges.
                 def _resolve_best_ask(token_id: str, gamma_price: float) -> float:
                     tid = str(token_id)
-                    # 1. WSS feed (most accurate)
-                    if tid in best_ask_map and best_ask_map[tid] is not None:
-                        return float(best_ask_map[tid])
-                    # 2. CLOB order book (executable)
+                    # 1. CLOB order book (most accurate for execution)
                     if tid in clob_best_ask_map and clob_best_ask_map[tid] is not None:
                         return float(clob_best_ask_map[tid])
+                    # 2. WSS feed (real-time but may differ from executable ask)
+                    if tid in best_ask_map and best_ask_map[tid] is not None:
+                        return float(best_ask_map[tid])
                     # 3. Gamma mid-price (fallback)
                     return gamma_price
 
@@ -435,10 +436,12 @@ class StrategyOrchestrator:
     def _fetch_clob_best_asks(
         self,
         markets: list,
-        already_have: dict[str, float],
     ) -> dict[str, float]:
-        """Fetch best-ask prices from the CLOB order book for tokens that
-        don't already have WSS data.
+        """Fetch best-ask prices from the CLOB order book for negRisk tokens.
+
+        CLOB books give the real executable ask price, which is authoritative
+        for multi-outcome arb edge detection.  We always fetch these
+        regardless of whether WSS has data for the token.
 
         Only fetches books for **negRisk** markets (multi-outcome arb
         candidates).  Binary YES+NO arb is empirically dead after the 2%
@@ -462,8 +465,9 @@ class StrategyOrchestrator:
         # --- Cache check: return cached data if still fresh ----------------
         now = _time.time()
         if self._clob_cache and (now - self._clob_cache_ts) < self._CLOB_CACHE_TTL:
-            # Return cached prices (excluding tokens the WSS already covers)
-            return {k: v for k, v in self._clob_cache.items() if k not in already_have}
+            # Return all cached CLOB prices (CLOB is authoritative for
+            # negRisk executable asks — do NOT filter out WSS-covered tokens).
+            return dict(self._clob_cache)
 
         # --- Build list of tokens that need CLOB data ----------------------
         tokens_to_fetch: list[str] = []
@@ -474,7 +478,7 @@ class StrategyOrchestrator:
                 continue
             for t in m.tokens:
                 tid = str(t.token_id)
-                if tid and tid not in already_have:
+                if tid:
                     tokens_to_fetch.append(tid)
 
         # Deduplicate, preserve order

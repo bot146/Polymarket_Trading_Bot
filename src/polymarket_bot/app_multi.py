@@ -378,15 +378,21 @@ def main() -> None:
                     log.warning(f"No strategy found for signal type: {signal.opportunity.strategy_type}")
                     continue
                 
+                # Mark position active BEFORE execution so the orchestrator
+                # dedup filter blocks re-attempts on the very next cycle,
+                # even if this attempt fails (transient FOK miss, etc.).
+                condition_id = signal.opportunity.metadata.get("condition_id")
+                if condition_id:
+                    orchestrator.mark_position_active(condition_id)
+
                 # Execute
                 result = executor.execute_signal(signal, strategy)
                 
                 if result.success:
                     orchestrator.total_signals_executed += 1
-                    # Mark position as active (for orchestrator tracking)
-                    condition_id = signal.opportunity.metadata.get("condition_id")
-                    if condition_id:
-                        orchestrator.mark_position_active(condition_id)
+                    log.info(f"✅ Paper trade executed: {signal.opportunity.strategy_type.value} profit=${signal.opportunity.expected_profit:.4f}")
+                else:
+                    log.warning(f"❌ Signal execution failed: {result.reason}")
             
             # Print stats periodically
             now = time.time()
