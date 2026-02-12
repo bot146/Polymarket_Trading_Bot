@@ -86,6 +86,12 @@ class PositionCloser:
         
         # Check open positions for profit targets
         for position in open_positions:
+            # Multi-outcome arb positions must be held as a complete group.
+            # Individual bracket exits break the arb — they should only exit
+            # when the market resolves (one bracket pays $1, rest pay $0).
+            if position.strategy == "multi_outcome_arb":
+                continue
+
             if self._should_close_position(position, price_data):
                 result = self.close_position(position, price_data)
                 results.append(result)

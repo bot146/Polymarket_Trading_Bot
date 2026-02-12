@@ -274,6 +274,14 @@ def main() -> None:
     orchestrator = StrategyOrchestrator(settings, orch_config)
     executor = UnifiedExecutor(client, settings, position_manager=position_manager)
     
+    # Restore active_positions from saved positions so dedup survives restarts.
+    # Without this, restarting the bot re-executes groups we already hold.
+    open_conditions = {p.condition_id for p in position_manager.get_open_positions() if p.condition_id}
+    for cid in open_conditions:
+        orchestrator.mark_position_active(cid)
+    if open_conditions:
+        log.info("✅ Restored %d active positions from disk", len(open_conditions))
+
     # Start dashboard if enabled
     dashboard: Dashboard | None = None
     if settings.enable_dashboard:
@@ -345,10 +353,13 @@ def main() -> None:
 
                 # Merge CLOB cache into ask map so paper FOK fills can see
                 # executable ask prices for negRisk tokens.
+                # CLOB books are authoritative — they represent real executable
+                # asks, while WSS mid-prices can be far off for low-probability
+                # brackets (e.g. WSS mid=0.999 but CLOB ask=0.021).
                 clob_cache = getattr(orchestrator, "_clob_cache", {})
                 for tid, price in clob_cache.items():
-                    if tid not in best_ask_map or best_ask_map.get(tid) is None:
-                        best_ask_map[tid] = price
+                    if price is not None:
+                        best_ask_map[tid] = price  # CLOB always overrides WSS
 
                 if best_bid_map or best_ask_map:
                     token_ids = set(best_bid_map.keys()) | set(best_ask_map.keys())

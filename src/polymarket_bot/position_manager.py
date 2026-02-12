@@ -269,10 +269,49 @@ class PositionManager:
     def update_unrealized_pnl(self, price_data: dict[str, Decimal]) -> None:
         """Update unrealized P&L for all open positions.
         
+        For multi-outcome arb positions, we calculate P&L at the group level
+        rather than using individual WSS mid-prices, because:
+        - The arb holds ALL brackets simultaneously
+        - Exactly one bracket will resolve to $1.00, the rest to $0.00
+        - Expected value per share = $1.00 across the whole group
+        - Using WSS mid-prices ($0.50 each) would wildly overstate returns
+        
         Args:
             price_data: Dict of token_id -> current_price
         """
-        for position in self.get_open_positions():
+        open_positions = self.get_open_positions()
+
+        # --- Multi-outcome arb: group-level P&L ---
+        # Group arb positions by condition_id (= neg_risk_market_id).
+        arb_groups: dict[str, list[Position]] = {}
+        non_arb: list[Position] = []
+
+        for position in open_positions:
+            if position.strategy == "multi_outcome_arb":
+                arb_groups.setdefault(position.condition_id, []).append(position)
+            else:
+                non_arb.append(position)
+
+        # For each arb group, the expected value is $1.00 × qty per execution
+        # (one bracket wins).  If the same group was executed N times (e.g.
+        # across restarts before the dedup fix), there are N × B positions
+        # (B = unique brackets).  We detect N by comparing total positions
+        # to the number of unique token_ids.
+        for _group_id, positions in arb_groups.items():
+            if not positions:
+                continue
+            qty = positions[0].quantity  # All brackets have the same size
+            unique_tokens = len({p.token_id for p in positions})
+            num_executions = max(1, len(positions) // unique_tokens) if unique_tokens else 1
+            group_cost = sum(p.entry_price * qty for p in positions)
+            group_value = Decimal("1.00") * qty * num_executions  # One winner per execution
+            group_pnl = group_value - group_cost
+            per_position_pnl = group_pnl / len(positions)
+            for p in positions:
+                p.unrealized_pnl = per_position_pnl
+
+        # --- All other strategies: standard per-token valuation ---
+        for position in non_arb:
             if position.token_id in price_data:
                 position.update_unrealized_pnl(price_data[position.token_id])
     

@@ -122,8 +122,8 @@ class MarketScanner:
                     log.debug(f"Failed to parse market: {e}")
                     continue
             
-            # Log comprehensive stats
-            log.info(
+            # Log comprehensive stats (debug — fires every scan cycle)
+            log.debug(
                 f"Fetched {len(markets)} markets from Gamma API "
                 f"(requested_limit={fetch_limit}, active_only={active_only}, parse_errors={parse_errors})"
             )
@@ -168,8 +168,8 @@ class MarketScanner:
         high_volume = [m for m in markets if m.volume >= min_volume and m.active]
         high_volume.sort(key=lambda m: m.volume, reverse=True)
         
-        # Log filtering stats
-        log.info(
+        # Log filtering stats (debug — fires every scan cycle)
+        log.debug(
             f"High-volume market filter: {len(markets)} total markets -> "
             f"{len(high_volume)} markets with volume >= ${min_volume:,.0f}"
         )
@@ -206,7 +206,7 @@ class MarketScanner:
                 except Exception:
                     continue
                     
-            log.info(f"Found {len(markets)} resolved markets (limit={fetch_limit})")
+            log.debug(f"Found {len(markets)} resolved markets (limit={fetch_limit})")
             return markets
             
         except Exception as e:

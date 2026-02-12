@@ -72,6 +72,13 @@ class ResolutionMonitor:
             # Skip if already processed
             if condition_id in self._resolved_markets:
                 continue
+
+            # Skip negRisk group IDs (e.g. "0xb9aa...") — they are not
+            # individual Gamma market IDs and will return 422.  Multi-outcome
+            # arb positions use the neg_risk_market_id as condition_id for
+            # grouping; resolution must be checked per-bracket separately.
+            if condition_id.startswith("0x"):
+                continue
             
             # Check market status
             market = self.scanner.get_market(condition_id)
