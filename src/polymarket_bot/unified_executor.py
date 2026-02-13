@@ -62,6 +62,7 @@ class UnifiedExecutor:
         self.paper_blotter = PaperBlotter(
             fill_probability=float(self.settings.paper_fill_probability),
             require_volume_cross=self.settings.paper_require_volume_cross,
+            random_seed=self.settings.paper_random_seed,
         )
 
         # Track fills/placements for basic realism metrics.

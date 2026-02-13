@@ -85,7 +85,7 @@ class StrategyOrchestrator:
         self._feed_started = False
         
         # State tracking
-        self.active_positions: list[str] = []  # Track active condition_ids
+        self.active_positions: list[str] = []  # Track active condition_ids (duplicates = stacked entries)
         self.total_signals_seen = 0
         self.total_signals_executed = 0
 
@@ -549,11 +549,12 @@ class StrategyOrchestrator:
 
     def mark_position_active(self, condition_id: str) -> None:
         """Mark a market as having an active position."""
-        if condition_id not in self.active_positions:
-            self.active_positions.append(condition_id)
+        # Keep duplicates to represent stacked entries in the same condition.
+        self.active_positions.append(condition_id)
 
     def mark_position_closed(self, condition_id: str) -> None:
         """Mark a market position as closed."""
+        # Remove one entry at a time so stacked accounting stays accurate.
         if condition_id in self.active_positions:
             self.active_positions.remove(condition_id)
 

@@ -1,0 +1,48 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║     POLYMARKET MULTI-STRATEGY TRADING BOT                   ║
+║                                                              ║
+║     Full Trade Lifecycle: Entry → Monitoring → Exit         ║
+║     Strategies: Arbitrage, Guaranteed Win, Stat Arb         ║
+║     Built with precision. Designed for profit.              ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+
+[22:31:05] INFO     Starting Polymarket Multi-Strategy Trading app_multi.py:216
+                    Bot                                                        
+           INFO     Mode: PAPER                                app_multi.py:217
+           INFO     Kill Switch: DISABLED                      app_multi.py:218
+           INFO     Max Order Size: $20                        app_multi.py:219
+           INFO     Min Edge: 0.5¢                             app_multi.py:220
+           INFO     Market Fetch Limit: 10000 (0=use           app_multi.py:221
+                    DEFAULT_FETCH_LIMIT)                                       
+           INFO     Min Market Volume: $1,000                  app_multi.py:222
+           INFO     Loaded 0 positions from             position_manager.py:392
+                    C:\Users\heinz\.polymarket_bot\posi                        
+                    tions.json                                                 
+           INFO     ✅ Position manager initialized (0         app_multi.py:237
+                    positions loaded)                                          
+           WARNING  ⚠️  No private key provided - running in   app_multi.py:248
+                    data-only mode                                             
+           INFO     ✅ Resolution monitor initialized          app_multi.py:259
+           INFO     ✅ Position closer initialized             app_multi.py:268
+           INFO     Registered: ArbitrageStrategy           orchestrator.py:111
+                    (taker_fee=2.00%)                                          
+           INFO     Registered: GuaranteedWinStrategy       orchestrator.py:121
+           INFO     Registered: MultiOutcomeArbStrategy     orchestrator.py:182
+           INFO     Registered: ConditionalArbStrategy      orchestrator.py:192
+           INFO     Registered: LiquidityRewardsStrategy    orchestrator.py:202
+           INFO     Registered: NearResolutionStrategy      orchestrator.py:213
+           INFO     📊 Dashboard running at                    dashboard.py:278
+                    http://127.0.0.1:8050                                      
+           INFO     🚀 Bot initialized with full trade         app_multi.py:316
+                    lifecycle. Starting main loop...                           
+[22:31:06] INFO     Enhanced market feed started for 1000     market_feed.py:44
+                    assets                                                     
+           INFO     ✅ Top-of-book feed started             orchestrator.py:299
+                    (assets=1000)                                              
+           INFO     📖 Fetching CLOB books for 926 negRisk  orchestrator.py:660
+                    tokens (concurrent, TTL=60s)...                            
+           INFO     Websocket connected                          _logging.py:89
+           INFO     WSS connected (market). subscribed_assets=1000    wss.py:73

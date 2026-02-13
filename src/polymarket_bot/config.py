@@ -20,6 +20,17 @@ class Settings:
     trading_mode: str = "paper"  # paper|live
     kill_switch: bool = True
     log_level: str = "INFO"
+    max_concurrent_trades: int = 5
+
+    # Strategy toggles
+    enable_arbitrage: bool = True
+    enable_guaranteed_win: bool = True
+    enable_multi_outcome_arb: bool = True
+    enable_stat_arb: bool = False
+    enable_sniping: bool = False
+    enable_market_making: bool = False
+    enable_value_betting: bool = False
+    enable_oracle_sniping_strategy: bool = False
 
     # Risk
     max_order_usdc: Decimal = Decimal("20")
@@ -104,6 +115,7 @@ class Settings:
     # Paper fill realism
     paper_fill_probability: Decimal = Decimal("0.5")  # 50% fill chance for maker
     paper_require_volume_cross: bool = True            # Require volume to cross price level
+    paper_random_seed: int | None = None               # Deterministic paper fills when set
 
 
 def load_settings(env_file: str | None = None) -> Settings:
@@ -115,7 +127,7 @@ def load_settings(env_file: str | None = None) -> Settings:
     """
 
     if env_file:
-        load_dotenv(env_file)
+        load_dotenv(env_file, override=True)
     else:
         load_dotenv()
 
@@ -128,6 +140,14 @@ def load_settings(env_file: str | None = None) -> Settings:
             return default
         return val.strip().lower() in {"1", "true", "yes"}
 
+    def parse_opt_int(val: str | None) -> int | None:
+        if val is None:
+            return None
+        v = val.strip()
+        if v == "":
+            return None
+        return int(v)
+
     return Settings(
         poly_host=os.getenv("POLY_HOST", "https://clob.polymarket.com").strip(),
         poly_chain_id=int(os.getenv("POLY_CHAIN_ID", "137")),
@@ -137,6 +157,16 @@ def load_settings(env_file: str | None = None) -> Settings:
         trading_mode=trading_mode,
         kill_switch=kill_switch,
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper(),
+        max_concurrent_trades=int(os.getenv("MAX_CONCURRENT_TRADES", "5")),
+
+        enable_arbitrage=parse_bool(os.getenv("ENABLE_ARBITRAGE"), True),
+        enable_guaranteed_win=parse_bool(os.getenv("ENABLE_GUARANTEED_WIN"), True),
+        enable_multi_outcome_arb=parse_bool(os.getenv("ENABLE_MULTI_OUTCOME_ARB"), True),
+        enable_stat_arb=parse_bool(os.getenv("ENABLE_STAT_ARB"), False),
+        enable_sniping=parse_bool(os.getenv("ENABLE_SNIPING"), False),
+        enable_market_making=parse_bool(os.getenv("ENABLE_MARKET_MAKING"), False),
+        enable_value_betting=parse_bool(os.getenv("ENABLE_VALUE_BETTING"), False),
+        enable_oracle_sniping_strategy=parse_bool(os.getenv("ENABLE_ORACLE_SNIPING_STRATEGY"), False),
         max_order_usdc=Decimal(os.getenv("MAX_ORDER_USDC", "20")),
         min_order_usdc=Decimal(os.getenv("MIN_ORDER_USDC", "2")),
         initial_order_pct=Decimal(os.getenv("INITIAL_ORDER_PCT", "25")),
@@ -210,6 +240,7 @@ def load_settings(env_file: str | None = None) -> Settings:
         # Paper fill realism
         paper_fill_probability=Decimal(os.getenv("PAPER_FILL_PROBABILITY", "0.5")),
         paper_require_volume_cross=parse_bool(os.getenv("PAPER_REQUIRE_VOLUME_CROSS"), True),
+        paper_random_seed=parse_opt_int(os.getenv("PAPER_RANDOM_SEED")),
     )
 
 

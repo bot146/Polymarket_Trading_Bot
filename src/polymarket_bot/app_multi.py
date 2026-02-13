@@ -270,15 +270,16 @@ def main() -> None:
     # Initialize orchestrator and executor
     orch_config = OrchestratorConfig(
         scan_interval=2.0,
-        max_concurrent_trades=5,
-        enable_arbitrage=True,
-        enable_guaranteed_win=True,
-        enable_multi_outcome_arb=True,  # Buy all YES tokens in a group for < $1
-        # Speculative strategies disabled — focus on guaranteed-profit only
-        enable_stat_arb=False,
-        enable_value_betting=False,
-        enable_sniping=False,
-        enable_market_making=False,
+        max_concurrent_trades=settings.max_concurrent_trades,
+        enable_arbitrage=settings.enable_arbitrage,
+        enable_guaranteed_win=settings.enable_guaranteed_win,
+        enable_multi_outcome_arb=settings.enable_multi_outcome_arb,
+        enable_stat_arb=settings.enable_stat_arb,
+        enable_value_betting=settings.enable_value_betting,
+        enable_sniping=settings.enable_sniping,
+        enable_market_making=settings.enable_market_making,
+        enable_oracle_sniping=settings.enable_oracle_sniping_strategy,
+        enable_copy_trading=settings.enable_copy_trading,
         # New strategies — toggled via .env
         enable_conditional_arb=settings.enable_conditional_arb,
         enable_liquidity_rewards=settings.enable_liquidity_rewards,
@@ -292,11 +293,11 @@ def main() -> None:
     
     # Restore active_positions from saved positions so dedup survives restarts.
     # Without this, restarting the bot re-executes groups we already hold.
-    open_conditions = {p.condition_id for p in position_manager.get_open_positions() if p.condition_id}
-    for cid in open_conditions:
-        orchestrator.mark_position_active(cid)
-    if open_conditions:
-        log.info("✅ Restored %d active positions from disk", len(open_conditions))
+    open_positions = [p for p in position_manager.get_open_positions() if p.condition_id]
+    for p in open_positions:
+        orchestrator.mark_position_active(p.condition_id)
+    if open_positions:
+        log.info("✅ Restored %d active position entries from disk", len(open_positions))
 
     # Start dashboard if enabled
     dashboard: Dashboard | None = None
@@ -350,10 +351,21 @@ def main() -> None:
                         price_data[tid] = _Decimal(str(ask_v))
                     elif bid_v is not None:
                         price_data[tid] = _Decimal(str(bid_v))
+                # Snapshot position_id -> condition_id before closes mutate storage.
+                pos_by_id = {
+                    p.position_id: p.condition_id
+                    for p in position_manager.get_open_positions() + position_manager.get_redeemable_positions()
+                    if p.position_id and p.condition_id
+                }
+
                 close_results = position_closer.check_and_close_positions(price_data)
                 if close_results:
                     successful_closes = [r for r in close_results if r.success]
                     if successful_closes:
+                        for r in successful_closes:
+                            cid = pos_by_id.get(r.position_id)
+                            if cid:
+                                orchestrator.mark_position_closed(cid)
                         log.info(f"✅ Closed {len(successful_closes)} positions")
                 last_position_close_check = loop_start
             
@@ -390,32 +402,25 @@ def main() -> None:
                         )
             
             # Execute signals
+            enabled_by_name = {s.name: s for s in orchestrator.registry.get_enabled()}
             for signal in signals:
                 if _shutdown_event.is_set():
                     break
                 
                 # Get the strategy that generated this signal
-                strategy = None
-                for strat in orchestrator.registry.get_enabled():
-                    if strat.name == signal.opportunity.strategy_type.value:
-                        strategy = strat
-                        break
+                strategy = enabled_by_name.get(signal.opportunity.strategy_type.value)
                 
                 if not strategy:
                     log.warning(f"No strategy found for signal type: {signal.opportunity.strategy_type}")
                     continue
-                
-                # Mark position active BEFORE execution so the orchestrator
-                # dedup filter blocks re-attempts on the very next cycle,
-                # even if this attempt fails (transient FOK miss, etc.).
-                condition_id = signal.opportunity.metadata.get("condition_id")
-                if condition_id:
-                    orchestrator.mark_position_active(condition_id)
 
                 # Execute
                 result = executor.execute_signal(signal, strategy)
                 
                 if result.success:
+                    condition_id = signal.opportunity.metadata.get("condition_id")
+                    if condition_id:
+                        orchestrator.mark_position_active(condition_id)
                     orchestrator.total_signals_executed += 1
                     log.info(f"✅ Paper trade executed: {signal.opportunity.strategy_type.value} profit=${signal.opportunity.expected_profit:.4f}")
                 else:

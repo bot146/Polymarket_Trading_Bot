@@ -85,6 +85,7 @@ class PaperBlotter:
             best_ask **strictly less** than order price (not equal), simulating
             that someone has to trade *through* the price level for a back-of-
             queue order to be reached.  Similarly for SELL.
+        random_seed: optional seed for deterministic fill randomness.
     """
 
     def __init__(
@@ -92,6 +93,7 @@ class PaperBlotter:
         *,
         fill_probability: float = 1.0,
         require_volume_cross: bool = False,
+        random_seed: int | None = None,
     ) -> None:
         self._next_id = 1
         self._orders: dict[str, PaperOrder] = {}
@@ -99,6 +101,7 @@ class PaperBlotter:
         self._best_ask: dict[str, Decimal | None] = {}
         self._fill_probability = max(0.0, min(1.0, fill_probability))
         self._require_volume_cross = require_volume_cross
+        self._rng = random.Random(random_seed)
 
     def submit(
         self,
@@ -301,7 +304,7 @@ class PaperBlotter:
                 continue
 
             # Probabilistic fill — simulates queue position.
-            if self._fill_probability < 1.0 and random.random() > self._fill_probability:
+            if self._fill_probability < 1.0 and self._rng.random() > self._fill_probability:
                 continue
 
             fill_size = order.remaining

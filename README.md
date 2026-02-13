@@ -82,12 +82,15 @@ In `src/polymarket_bot/app_multi.py`:
 
 ```python
 orch_config = OrchestratorConfig(
-    scan_interval=2.0,              # Scan every 2 seconds
-    max_concurrent_trades=5,        # Max 5 positions
-    enable_arbitrage=True,          # Classic arbitrage
-    enable_guaranteed_win=True,     # Resolved markets
-    enable_stat_arb=False,          # Advanced (disabled by default)
-    min_volume=Decimal("5000"),     # Min $5k volume
+   scan_interval=2.0,
+   max_concurrent_trades=settings.max_concurrent_trades,
+   enable_arbitrage=settings.enable_arbitrage,
+   enable_guaranteed_win=settings.enable_guaranteed_win,
+   enable_multi_outcome_arb=settings.enable_multi_outcome_arb,
+   enable_conditional_arb=settings.enable_conditional_arb,
+   enable_liquidity_rewards=settings.enable_liquidity_rewards,
+   enable_near_resolution=settings.enable_near_resolution,
+   enable_arb_stacking=settings.enable_arb_stacking,
 )
 ```
 
