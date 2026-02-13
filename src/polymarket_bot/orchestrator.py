@@ -88,6 +88,9 @@ class StrategyOrchestrator:
         self.active_positions: list[str] = []  # Track active condition_ids (duplicates = stacked entries)
         self.total_signals_seen = 0
         self.total_signals_executed = 0
+        self._dynamic_max_order_usdc: Decimal | None = None
+        self._dynamic_min_order_usdc: Decimal | None = None
+        self._dynamic_initial_order_pct: Decimal | None = None
 
     def _init_strategies(self) -> None:
         """Initialize and register trading strategies."""
@@ -473,9 +476,10 @@ class StrategyOrchestrator:
         Strategies that already sized below the tier target are left as-is
         (we never *increase* a signal's size beyond what the strategy chose).
         """
-        initial_pct = self.settings.initial_order_pct / Decimal("100")
-        min_usdc = self.settings.min_order_usdc
-        max_usdc = self.settings.max_order_usdc
+        initial_pct_raw = self._dynamic_initial_order_pct or self.settings.initial_order_pct
+        initial_pct = initial_pct_raw / Decimal("100")
+        min_usdc = self._dynamic_min_order_usdc or self.settings.min_order_usdc
+        max_usdc = self._dynamic_max_order_usdc or self.settings.max_order_usdc
         max_stacks = self.config.max_arb_stacks
 
         sized: list[StrategySignal] = []
@@ -557,6 +561,33 @@ class StrategyOrchestrator:
         # Remove one entry at a time so stacked accounting stays accurate.
         if condition_id in self.active_positions:
             self.active_positions.remove(condition_id)
+
+    def set_dynamic_max_order_usdc(self, max_order_usdc: Decimal | None) -> None:
+        """Set runtime max-order override used by graduated sizing.
+
+        Passing None restores static settings.max_order_usdc behavior.
+        """
+        if max_order_usdc is None:
+            self._dynamic_max_order_usdc = None
+            return
+        if max_order_usdc <= 0:
+            return
+        self._dynamic_max_order_usdc = max_order_usdc
+
+    def set_dynamic_sizing_params(
+        self,
+        *,
+        max_order_usdc: Decimal | None = None,
+        min_order_usdc: Decimal | None = None,
+        initial_order_pct: Decimal | None = None,
+    ) -> None:
+        """Set runtime sizing overrides used by graduated sizing."""
+        if max_order_usdc is not None and max_order_usdc > 0:
+            self._dynamic_max_order_usdc = max_order_usdc
+        if min_order_usdc is not None and min_order_usdc > 0:
+            self._dynamic_min_order_usdc = min_order_usdc
+        if initial_order_pct is not None and initial_order_pct > 0:
+            self._dynamic_initial_order_pct = initial_order_pct
 
     def get_stats(self) -> dict[str, Any]:
         """Get orchestrator statistics."""

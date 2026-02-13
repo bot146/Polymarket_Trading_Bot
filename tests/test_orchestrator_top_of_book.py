@@ -21,6 +21,13 @@ class _FakeMarket:
         self.active = active
         self.neg_risk_market_id = None
         self.group_item_title = None
+        self.end_date = None
+        self.liquidity = 0.0
+        self.spread = None
+        self.one_day_price_change = None
+        self.rewards_min_size = None
+        self.rewards_max_spread = None
+        self.rewards_daily_rate = None
 
 
 class _FakeScanner:

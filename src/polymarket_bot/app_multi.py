@@ -22,6 +22,7 @@ from polymarket_bot.config import load_settings
 from polymarket_bot.dashboard import Dashboard
 from polymarket_bot.logging import setup_logging
 from polymarket_bot.orchestrator import OrchestratorConfig, StrategyOrchestrator
+from polymarket_bot.paper_wallet import PaperWalletController
 from polymarket_bot.position_closer import PositionCloser
 from polymarket_bot.position_manager import PositionManager
 from polymarket_bot.resolution_monitor import ResolutionMonitor
@@ -64,7 +65,8 @@ def print_stats(
     executor: UnifiedExecutor,
     resolution_monitor: ResolutionMonitor,
     position_closer: PositionCloser,
-    uptime: float
+    uptime: float,
+    paper_wallet_snapshot: dict[str, float] | None = None,
 ):
     """Print comprehensive bot statistics."""
     orch_stats = orchestrator.get_stats()
@@ -77,6 +79,16 @@ def print_stats(
     log.info(f"📊 SIGNALS: seen={orch_stats['total_signals_seen']} executed={orch_stats['total_signals_executed']}")
     log.info(f"📈 EXECUTIONS: total={exec_stats['total_executions']} success={exec_stats['successful']} failed={exec_stats['failed']}")
     log.info(f"🎯 STRATEGIES: {orch_stats['enabled_strategies']} enabled")
+
+    if paper_wallet_snapshot is not None:
+        log.info(
+            "💼 PAPER WALLET: equity=$%.2f start=$%.2f adj=$%.2f size_mult=x%.2f dyn_max=$%.2f",
+            paper_wallet_snapshot.get("equity", 0.0),
+            paper_wallet_snapshot.get("starting_balance", 0.0),
+            paper_wallet_snapshot.get("manual_adjustment", 0.0),
+            paper_wallet_snapshot.get("multiplier", 1.0),
+            paper_wallet_snapshot.get("dynamic_max_order_usdc", 0.0),
+        )
 
     # Execution mode + lightweight risk/ops metrics
     profile = exec_stats.get("execution_profile")
@@ -234,6 +246,10 @@ def main() -> None:
     # Initialize position management
     storage_path = Path.home() / ".polymarket_bot" / "positions.json"
     position_manager = PositionManager(storage_path=str(storage_path))
+
+    # Paper mode always starts clean when configured.
+    if settings.trading_mode == "paper" and settings.paper_reset_on_start:
+        position_manager.reset_all_positions()
     log.info(f"✅ Position manager initialized ({len(position_manager.positions)} positions loaded)")
     
     # Initialize CLOB client
@@ -290,14 +306,52 @@ def main() -> None:
     
     orchestrator = StrategyOrchestrator(settings, orch_config)
     executor = UnifiedExecutor(client, settings, position_manager=position_manager)
+
+    # Paper/live wallet controller: equity-based sizing with runtime-editable tiers.
+    paper_wallet: PaperWalletController | None = None
+    last_wallet_snapshot: dict[str, float] | None = None
+    if settings.trading_mode in {"paper", "live"}:
+        wallet_path = (
+            Path(settings.paper_wallet_path)
+            if settings.paper_wallet_path
+            else (Path.home() / ".polymarket_bot" / "paper_wallet.json")
+        )
+        paper_wallet = PaperWalletController(
+            file_path=wallet_path,
+            default_starting_balance=settings.paper_start_balance,
+            default_tier_spec=settings.paper_sizing_tiers,
+            refresh_seconds=settings.paper_wallet_refresh_seconds,
+        )
+        if settings.trading_mode == "paper" and settings.paper_reset_on_start:
+            # Force clean $100 baseline on each paper restart.
+            wallet_path.parent.mkdir(parents=True, exist_ok=True)
+            wallet_path.write_text(
+                '{\n'
+                f'  "starting_balance": "{settings.paper_start_balance}",\n'
+                '  "manual_adjustment": "0",\n'
+                '  "tiers": [\n'
+                '    {"equity": "100", "multiplier": "1.00"},\n'
+                '    {"equity": "1000", "multiplier": "1.10"},\n'
+                '    {"equity": "5000", "multiplier": "1.20"},\n'
+                '    {"equity": "10000", "multiplier": "1.30"}\n'
+                '  ]\n'
+                '}',
+                encoding="utf-8",
+            )
+        paper_wallet.ensure_file()
+        log.info("💼 Paper wallet config: %s", wallet_path)
     
-    # Restore active_positions from saved positions so dedup survives restarts.
-    # Without this, restarting the bot re-executes groups we already hold.
+    # Restore dedup state from persisted open positions.
+    # In paper mode with reset-on-start enabled this list is empty by design.
+    # In live mode we intentionally restore so restarts preserve exposure state.
     open_positions = [p for p in position_manager.get_open_positions() if p.condition_id]
     for p in open_positions:
         orchestrator.mark_position_active(p.condition_id)
     if open_positions:
-        log.info("✅ Restored %d active position entries from disk", len(open_positions))
+        if settings.trading_mode == "live":
+            log.info("✅ Live startup: restored %d active position entries", len(open_positions))
+        else:
+            log.info("✅ Restored %d active position entries from disk", len(open_positions))
 
     # Start dashboard if enabled
     dashboard: Dashboard | None = None
@@ -320,12 +374,20 @@ def main() -> None:
     last_stats_time = start_time
     last_resolution_check = start_time
     last_position_close_check = start_time
+    last_runtime_reload_check = 0.0
     iteration = 0
     
     while not _shutdown_event.is_set():
         try:
             iteration += 1
             loop_start = time.time()
+
+            # Optional low-overhead runtime env reload (both paper and live).
+            if settings.runtime_reload_env and (loop_start - last_runtime_reload_check) >= settings.runtime_reload_seconds:
+                runtime_settings = load_settings()
+                last_runtime_reload_check = loop_start
+            else:
+                runtime_settings = settings
             
             # Check for market resolutions
             if loop_start - last_resolution_check >= 60:  # Every minute
@@ -370,6 +432,25 @@ def main() -> None:
                 last_position_close_check = loop_start
             
             # Run strategy scan
+            if settings.trading_mode in {"paper", "live"} and paper_wallet is not None:
+                paper_wallet.refresh()
+                portfolio = position_manager.get_portfolio_stats()
+                snap = paper_wallet.snapshot(portfolio_stats=portfolio)
+                paper_wallet.maybe_log_tier_change(snap)
+                dynamic_max = (runtime_settings.max_order_usdc * snap.multiplier).quantize(_Decimal("0.01"))
+                orchestrator.set_dynamic_sizing_params(
+                    max_order_usdc=dynamic_max,
+                    min_order_usdc=runtime_settings.min_order_usdc,
+                    initial_order_pct=runtime_settings.initial_order_pct,
+                )
+                last_wallet_snapshot = {
+                    "equity": float(snap.equity),
+                    "starting_balance": float(snap.starting_balance),
+                    "manual_adjustment": float(snap.manual_adjustment),
+                    "multiplier": float(snap.multiplier),
+                    "dynamic_max_order_usdc": float(dynamic_max),
+                }
+
             signals = orchestrator.run_once()
 
             # In PAPER mode, advance the paper fill simulator for resting maker
@@ -430,7 +511,14 @@ def main() -> None:
             now = time.time()
             if now - last_stats_time >= 60:  # Every minute
                 uptime = now - start_time
-                print_stats(orchestrator, executor, resolution_monitor, position_closer, uptime)
+                print_stats(
+                    orchestrator,
+                    executor,
+                    resolution_monitor,
+                    position_closer,
+                    uptime,
+                    paper_wallet_snapshot=last_wallet_snapshot,
+                )
                 last_stats_time = now
             
             # Log iteration info
@@ -455,7 +543,14 @@ def main() -> None:
     # Shutdown
     log.info("Shutting down gracefully...")
     uptime = time.time() - start_time
-    print_stats(orchestrator, executor, resolution_monitor, position_closer, uptime)
+    print_stats(
+        orchestrator,
+        executor,
+        resolution_monitor,
+        position_closer,
+        uptime,
+        paper_wallet_snapshot=last_wallet_snapshot,
+    )
     log.info("Bot stopped. Stay profitable! 🚀")
 
 

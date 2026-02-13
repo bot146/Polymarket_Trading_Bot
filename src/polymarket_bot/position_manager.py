@@ -392,3 +392,13 @@ class PositionManager:
             log.info(f"Loaded {len(self.positions)} positions from {self.storage_path}")
         except Exception as e:
             log.error(f"Failed to load positions: {e}")
+
+    def reset_all_positions(self) -> None:
+        """Clear all positions and persist an empty portfolio.
+
+        Intended for paper-mode clean restarts.
+        """
+        self.positions = {}
+        self._next_position_id = 1
+        self._save_positions()
+        log.info("Reset all positions (paper clean start)")
