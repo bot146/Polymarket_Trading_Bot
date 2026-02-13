@@ -3,8 +3,7 @@ __pycache__/
 *.py[cod]
 
 # Local config / secrets
-.env
-.env.*
+
 
 # Tooling caches
 .cache/
