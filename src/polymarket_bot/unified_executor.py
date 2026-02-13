@@ -73,6 +73,9 @@ class UnifiedExecutor:
         self._last_requote_ms_by_token: dict[str, int] = {}
         self._last_requote_ms_by_condition: dict[str, int] = {}
 
+        # Runtime bankroll/equity cap (set by app loop from wallet snapshot/live wallet).
+        self._equity_cap: Decimal | None = settings.paper_start_balance if settings.trading_mode == "paper" else None
+
         # Hedging metrics
         self.hedge_events = 0
         self.forced_hedge_events = 0
@@ -97,6 +100,14 @@ class UnifiedExecutor:
             api_base=self.settings.poly_host,
             min_depth_usdc=self.settings.min_book_depth_usdc,
         )
+
+    def set_equity_cap(self, cap: Decimal | None) -> None:
+        """Set current bankroll cap used by pre-trade risk checks."""
+        self._equity_cap = cap
+
+    def set_paper_equity_cap(self, cap: Decimal | None) -> None:
+        """Backward-compatible alias for set_equity_cap."""
+        self.set_equity_cap(cap)
 
     def execute_signal(
         self,
@@ -593,6 +604,23 @@ class UnifiedExecutor:
 
     def _risk_check_signal(self, signal: StrategySignal) -> tuple[bool, str]:
         """Risk checks that must hold before we place *any* orders."""
+        # Global bankroll cap (paper + live): do not allow open exposure to exceed
+        # current account equity cap.
+        if self.position_manager and self._equity_cap is not None:
+            try:
+                portfolio = self.position_manager.get_portfolio_stats()
+                current_open_cost = Decimal(str(portfolio.get("total_cost_basis", 0)))
+            except Exception:
+                current_open_cost = Decimal("0")
+
+            incoming_buy_cost = sum(
+                (trade.price * trade.size for trade in signal.trades if trade.side == "BUY"),
+                Decimal("0"),
+            )
+
+            if (current_open_cost + incoming_buy_cost) > self._equity_cap:
+                return False, "wallet_exposure_limit"
+
         # Inventory cap per condition (cost basis).
         if self.position_manager:
             condition_id = signal.opportunity.metadata.get("condition_id")

@@ -13,6 +13,7 @@ import signal as sig
 import sys
 import threading
 import time
+import re
 from decimal import Decimal
 from pathlib import Path
 from decimal import Decimal as _Decimal
@@ -82,13 +83,114 @@ def print_stats(
 
     if paper_wallet_snapshot is not None:
         log.info(
-            "💼 PAPER WALLET: equity=$%.2f start=$%.2f adj=$%.2f size_mult=x%.2f dyn_max=$%.2f",
+            "💼 WALLET: equity=$%.2f start=$%.2f adj=$%.2f size_mult=x%.2f dyn_max=$%.2f",
             paper_wallet_snapshot.get("equity", 0.0),
             paper_wallet_snapshot.get("starting_balance", 0.0),
             paper_wallet_snapshot.get("manual_adjustment", 0.0),
             paper_wallet_snapshot.get("multiplier", 1.0),
             paper_wallet_snapshot.get("dynamic_max_order_usdc", 0.0),
         )
+
+
+def _extract_decimal_candidates(obj: object) -> list[tuple[str, _Decimal]]:
+    candidates: list[tuple[str, _Decimal]] = []
+
+    def walk(val: object, prefix: str = "") -> None:
+        if isinstance(val, dict):
+            for k, v in val.items():
+                key = f"{prefix}.{k}" if prefix else str(k)
+                walk(v, key)
+            return
+        if isinstance(val, (list, tuple)):
+            for i, item in enumerate(val):
+                key = f"{prefix}[{i}]" if prefix else f"[{i}]"
+                walk(item, key)
+            return
+        if val is None:
+            return
+
+        s = str(val).strip()
+        if not s:
+            return
+        # Keep plain numeric-like strings only.
+        if not re.fullmatch(r"[-+]?\d+(\.\d+)?", s):
+            return
+        try:
+            d = _Decimal(s)
+        except Exception:
+            return
+        if d < 0:
+            return
+        candidates.append((prefix.lower(), d))
+
+    walk(obj)
+    return candidates
+
+
+def _normalize_usdc_amount(raw: _Decimal) -> _Decimal:
+    # Some APIs return micro-USDC integers.
+    if raw > _Decimal("1000000"):
+        return (raw / _Decimal("1000000")).quantize(_Decimal("0.000001"))
+    return raw
+
+
+def _extract_live_available_collateral(resp: object) -> _Decimal | None:
+    if resp is None:
+        return None
+
+    payload: object = resp
+    if hasattr(resp, "model_dump"):
+        try:
+            payload = resp.model_dump()  # type: ignore[assignment]
+        except Exception:
+            payload = resp
+    elif hasattr(resp, "__dict__"):
+        try:
+            payload = dict(getattr(resp, "__dict__"))
+        except Exception:
+            payload = resp
+
+    candidates = _extract_decimal_candidates(payload)
+    if not candidates:
+        return None
+
+    priority = ("available", "balance", "collateral", "amount")
+    for tag in priority:
+        for key, value in candidates:
+            if tag in key:
+                return _normalize_usdc_amount(value)
+
+    return _normalize_usdc_amount(candidates[0][1])
+
+
+def _compute_multiplier_for_equity(equity: _Decimal, tier_spec: str) -> tuple[_Decimal, _Decimal]:
+    multiplier = _Decimal("1")
+    floor = _Decimal("0")
+
+    tiers: list[tuple[_Decimal, _Decimal]] = []
+    for raw in (tier_spec or "").split(","):
+        item = raw.strip()
+        if not item or ":" not in item:
+            continue
+        left, right = item.split(":", 1)
+        try:
+            eq = _Decimal(left.strip())
+            mult = _Decimal(right.strip())
+        except Exception:
+            continue
+        if eq < 0 or mult <= 0:
+            continue
+        tiers.append((eq, mult))
+
+    tiers.sort(key=lambda x: x[0])
+    for eq_floor, eq_mult in tiers:
+        if equity >= eq_floor:
+            floor = eq_floor
+            multiplier = eq_mult
+        else:
+            break
+
+    return multiplier, floor
 
     # Execution mode + lightweight risk/ops metrics
     profile = exec_stats.get("execution_profile")
@@ -375,6 +477,8 @@ def main() -> None:
     last_resolution_check = start_time
     last_position_close_check = start_time
     last_runtime_reload_check = 0.0
+    last_live_wallet_refresh_check = 0.0
+    last_live_available_collateral: _Decimal | None = None
     iteration = 0
     
     while not _shutdown_event.is_set():
@@ -433,21 +537,69 @@ def main() -> None:
             
             # Run strategy scan
             if settings.trading_mode in {"paper", "live"} and paper_wallet is not None:
-                paper_wallet.refresh()
                 portfolio = position_manager.get_portfolio_stats()
-                snap = paper_wallet.snapshot(portfolio_stats=portfolio)
-                paper_wallet.maybe_log_tier_change(snap)
-                dynamic_max = (runtime_settings.max_order_usdc * snap.multiplier).quantize(_Decimal("0.01"))
+
+                if settings.trading_mode == "paper":
+                    paper_wallet.refresh()
+                    snap = paper_wallet.snapshot(portfolio_stats=portfolio)
+                    paper_wallet.maybe_log_tier_change(snap)
+                    equity_cap = snap.equity
+                    multiplier = snap.multiplier
+                    starting_balance = snap.starting_balance
+                    manual_adjustment = snap.manual_adjustment
+                else:
+                    # LIVE: use real collateral balance as hard cap source and include
+                    # currently-open cost basis to estimate account equity.
+                    refresh_interval = max(1.0, float(settings.paper_wallet_refresh_seconds))
+                    if client is not None and (loop_start - last_live_wallet_refresh_check) >= refresh_interval:
+                        last_live_wallet_refresh_check = loop_start
+                        try:
+                            from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+
+                            resp = client.get_balance_allowance(
+                                BalanceAllowanceParams(
+                                    asset_type=AssetType.COLLATERAL,
+                                    token_id=None,
+                                    signature_type=-1,
+                                )
+                            )
+                            live_available = _extract_live_available_collateral(resp)
+                            if live_available is not None:
+                                last_live_available_collateral = live_available
+                        except Exception as e:
+                            log.warning("Could not refresh live collateral balance; keeping last value: %s", e)
+
+                    open_cost = _Decimal(str(portfolio.get("total_cost_basis", 0)))
+                    unrealized_pnl = _Decimal(str(portfolio.get("total_unrealized_pnl", 0)))
+                    available_collateral = last_live_available_collateral
+                    if available_collateral is None:
+                        # Conservative fallback until first successful wallet read.
+                        available_collateral = _Decimal(str(settings.paper_start_balance))
+
+                    # Mark-to-market live equity cap:
+                    # cash/collateral + marked value of open positions.
+                    equity_cap = (available_collateral + open_cost + unrealized_pnl).quantize(_Decimal("0.01"))
+                    if equity_cap < _Decimal("0"):
+                        equity_cap = _Decimal("0")
+                    multiplier, _tier_floor = _compute_multiplier_for_equity(
+                        equity_cap,
+                        settings.paper_sizing_tiers,
+                    )
+                    starting_balance = available_collateral
+                    manual_adjustment = _Decimal("0")
+
+                executor.set_equity_cap(equity_cap)
+                dynamic_max = (runtime_settings.max_order_usdc * multiplier).quantize(_Decimal("0.01"))
                 orchestrator.set_dynamic_sizing_params(
                     max_order_usdc=dynamic_max,
                     min_order_usdc=runtime_settings.min_order_usdc,
                     initial_order_pct=runtime_settings.initial_order_pct,
                 )
                 last_wallet_snapshot = {
-                    "equity": float(snap.equity),
-                    "starting_balance": float(snap.starting_balance),
-                    "manual_adjustment": float(snap.manual_adjustment),
-                    "multiplier": float(snap.multiplier),
+                    "equity": float(equity_cap),
+                    "starting_balance": float(starting_balance),
+                    "manual_adjustment": float(manual_adjustment),
+                    "multiplier": float(multiplier),
                     "dynamic_max_order_usdc": float(dynamic_max),
                 }
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -251,7 +252,7 @@ def load_settings(env_file: str | None = None) -> Settings:
         paper_require_volume_cross=parse_bool(os.getenv("PAPER_REQUIRE_VOLUME_CROSS"), True),
         paper_random_seed=parse_opt_int(os.getenv("PAPER_RANDOM_SEED")),
         paper_start_balance=Decimal(os.getenv("PAPER_START_BALANCE", "100")),
-        paper_wallet_path=os.getenv("PAPER_WALLET_PATH", "").strip(),
+        paper_wallet_path=(os.getenv("PAPER_WALLET_PATH") or "").strip() or str(Path.home() / ".polymarket_bot" / "paper_wallet.json"),
         paper_sizing_tiers=os.getenv("PAPER_SIZING_TIERS", "100:1.00,1000:1.10,5000:1.20,10000:1.30").strip(),
         paper_wallet_refresh_seconds=float(os.getenv("PAPER_WALLET_REFRESH_SECONDS", "5.0")),
         paper_reset_on_start=parse_bool(os.getenv("PAPER_RESET_ON_START"), True),
