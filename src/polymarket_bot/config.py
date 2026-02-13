@@ -23,6 +23,8 @@ class Settings:
 
     # Risk
     max_order_usdc: Decimal = Decimal("20")
+    min_order_usdc: Decimal = Decimal("2")       # Minimum order size per trade
+    initial_order_pct: Decimal = Decimal("25")    # First entry = 25% of max_order_usdc
     min_edge_cents: Decimal = Decimal("0.5")
 
     # Execution profile
@@ -90,6 +92,15 @@ class Settings:
     whale_min_trade_usdc: Decimal = Decimal("1000")  # Min trade size to follow
     whale_addresses: str = ""  # Comma-separated addresses
 
+    # New strategy flags
+    enable_conditional_arb: bool = False      # Cumulative bracket arb — disabled by default
+    enable_liquidity_rewards: bool = False    # Liquidity reward harvesting — disabled by default
+    enable_near_resolution: bool = False      # Near-resolution sniping — disabled by default
+    enable_arb_stacking: bool = False         # Allow multiple executions on same arb group
+    max_arb_stacks: int = 3                   # Max stacked positions per arb group
+    near_resolution_max_hours: float = 48.0   # Max hours to end for near-resolution
+    liquidity_rewards_max_position: Decimal = Decimal("50")  # Max capital per reward market
+
     # Paper fill realism
     paper_fill_probability: Decimal = Decimal("0.5")  # 50% fill chance for maker
     paper_require_volume_cross: bool = True            # Require volume to cross price level
@@ -127,6 +138,8 @@ def load_settings(env_file: str | None = None) -> Settings:
         kill_switch=kill_switch,
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper(),
         max_order_usdc=Decimal(os.getenv("MAX_ORDER_USDC", "20")),
+        min_order_usdc=Decimal(os.getenv("MIN_ORDER_USDC", "2")),
+        initial_order_pct=Decimal(os.getenv("INITIAL_ORDER_PCT", "25")),
         min_edge_cents=Decimal(os.getenv("MIN_EDGE_CENTS", "0.5")),
         edge_buffer_cents=Decimal(os.getenv("EDGE_BUFFER_CENTS", "0.2")),
 
@@ -184,6 +197,15 @@ def load_settings(env_file: str | None = None) -> Settings:
         enable_copy_trading=parse_bool(os.getenv("ENABLE_COPY_TRADING"), False),
         whale_min_trade_usdc=Decimal(os.getenv("WHALE_MIN_TRADE_USDC", "1000")),
         whale_addresses=os.getenv("WHALE_ADDRESSES", ""),
+
+        # New strategy flags
+        enable_conditional_arb=parse_bool(os.getenv("ENABLE_CONDITIONAL_ARB"), False),
+        enable_liquidity_rewards=parse_bool(os.getenv("ENABLE_LIQUIDITY_REWARDS"), False),
+        enable_near_resolution=parse_bool(os.getenv("ENABLE_NEAR_RESOLUTION"), False),
+        enable_arb_stacking=parse_bool(os.getenv("ENABLE_ARB_STACKING"), False),
+        max_arb_stacks=int(os.getenv("MAX_ARB_STACKS", "3")),
+        near_resolution_max_hours=float(os.getenv("NEAR_RESOLUTION_MAX_HOURS", "48.0")),
+        liquidity_rewards_max_position=Decimal(os.getenv("LIQUIDITY_REWARDS_MAX_POSITION", "50")),
 
         # Paper fill realism
         paper_fill_probability=Decimal(os.getenv("PAPER_FILL_PROBABILITY", "0.5")),

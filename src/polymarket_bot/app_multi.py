@@ -8,8 +8,10 @@ and automatic position closing.
 from __future__ import annotations
 
 import logging
+import os
 import signal as sig
 import sys
+import threading
 import time
 from decimal import Decimal
 from pathlib import Path
@@ -28,8 +30,9 @@ from polymarket_bot.unified_executor import UnifiedExecutor
 
 log = logging.getLogger(__name__)
 
-# Global flag for graceful shutdown
-_shutdown_requested = False
+# Global event for graceful shutdown (thread-safe, avoids time.sleep SIGINT issues)
+_shutdown_event = threading.Event()
+_shutdown_requested = False  # kept for backward compat; driven by _shutdown_event
 
 
 def signal_handler(signum, frame):
@@ -37,6 +40,7 @@ def signal_handler(signum, frame):
     global _shutdown_requested
     log.warning(f"Shutdown signal received: {signum}")
     _shutdown_requested = True
+    _shutdown_event.set()
 
 
 def print_banner():
@@ -217,8 +221,14 @@ def main() -> None:
     log.info(f"Market Fetch Limit: {settings.market_fetch_limit} (0=use DEFAULT_FETCH_LIMIT)")
     log.info(f"Min Market Volume: ${settings.min_market_volume:,.0f}")
     
-    # Register signal handlers for graceful shutdown
-    sig.signal(sig.SIGINT, signal_handler)
+    # Register signal handlers for graceful shutdown.
+    # On Windows, VS Code terminals send spurious SIGINT to background
+    # processes.  We ignore SIGINT and rely solely on SIGTERM (or
+    # Ctrl+Break) to stop the bot.
+    if os.name == "nt":
+        sig.signal(sig.SIGINT, sig.SIG_IGN)
+    else:
+        sig.signal(sig.SIGINT, signal_handler)
     sig.signal(sig.SIGTERM, signal_handler)
     
     # Initialize position management
@@ -269,6 +279,12 @@ def main() -> None:
         enable_value_betting=False,
         enable_sniping=False,
         enable_market_making=False,
+        # New strategies — toggled via .env
+        enable_conditional_arb=settings.enable_conditional_arb,
+        enable_liquidity_rewards=settings.enable_liquidity_rewards,
+        enable_near_resolution=settings.enable_near_resolution,
+        enable_arb_stacking=settings.enable_arb_stacking,
+        max_arb_stacks=settings.max_arb_stacks,
     )
     
     orchestrator = StrategyOrchestrator(settings, orch_config)
@@ -305,7 +321,7 @@ def main() -> None:
     last_position_close_check = start_time
     iteration = 0
     
-    while not _shutdown_requested:
+    while not _shutdown_event.is_set():
         try:
             iteration += 1
             loop_start = time.time()
@@ -375,7 +391,7 @@ def main() -> None:
             
             # Execute signals
             for signal in signals:
-                if _shutdown_requested:
+                if _shutdown_event.is_set():
                     break
                 
                 # Get the strategy that generated this signal
@@ -416,18 +432,20 @@ def main() -> None:
             if signals:
                 log.info(f"Iteration {iteration}: processed {len(signals)} signals")
             
-            # Sleep until next scan
+            # Sleep until next scan (use Event.wait instead of time.sleep
+            # to avoid KeyboardInterrupt / spurious SIGINT on Windows)
             elapsed = time.time() - loop_start
             sleep_time = max(0, orch_config.scan_interval - elapsed)
             if sleep_time > 0:
-                time.sleep(sleep_time)
+                _shutdown_event.wait(timeout=sleep_time)
                 
         except KeyboardInterrupt:
             log.warning("Keyboard interrupt received")
+            _shutdown_event.set()
             break
         except Exception as e:
             log.exception(f"Error in main loop: {e}")
-            time.sleep(5)  # Back off on errors
+            _shutdown_event.wait(timeout=5)  # Back off on errors
     
     # Shutdown
     log.info("Shutting down gracefully...")

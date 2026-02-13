@@ -89,7 +89,8 @@ class PositionCloser:
             # Multi-outcome arb positions must be held as a complete group.
             # Individual bracket exits break the arb — they should only exit
             # when the market resolves (one bracket pays $1, rest pay $0).
-            if position.strategy == "multi_outcome_arb":
+            # Same applies to conditional arb (partial bracket sets).
+            if position.strategy in ("multi_outcome_arb", "conditional_arb"):
                 continue
 
             if self._should_close_position(position, price_data):

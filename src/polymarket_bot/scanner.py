@@ -45,6 +45,15 @@ class MarketInfo:
     winning_outcome: str | None = None
     neg_risk_market_id: str | None = None  # Shared ID for multi-outcome groups
     group_item_title: str | None = None  # Bracket label (e.g. "250-500k")
+    # Liquidity reward fields (from Gamma API)
+    rewards_min_size: Decimal | None = None
+    rewards_max_spread: Decimal | None = None
+    rewards_daily_rate: Decimal | None = None
+    # Price / spread metadata
+    spread: Decimal | None = None
+    one_day_price_change: float | None = None
+    best_bid: Decimal | None = None
+    best_ask: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -288,6 +297,11 @@ class MarketScanner:
                 for t in tokens
             ]
 
+        # Parse optional reward / spread fields (may be absent or null)
+        def _dec_or_none(key: str) -> Decimal | None:
+            v = data.get(key)
+            return Decimal(str(v)) if v is not None else None
+
         return MarketInfo(
             condition_id=str(data.get("conditionId") or data.get("condition_id") or ""),
             question=str(data.get("question", "")),
@@ -301,6 +315,13 @@ class MarketScanner:
             winning_outcome=data.get("winning_outcome"),
             neg_risk_market_id=data.get("negRiskMarketID") or data.get("neg_risk_market_id"),
             group_item_title=data.get("groupItemTitle") or data.get("group_item_title"),
+            rewards_min_size=_dec_or_none("rewardsMinSize"),
+            rewards_max_spread=_dec_or_none("rewardsMaxSpread"),
+            rewards_daily_rate=_dec_or_none("rewardsDailyRate"),
+            spread=_dec_or_none("spread"),
+            one_day_price_change=float(data["oneDayPriceChange"]) if data.get("oneDayPriceChange") is not None else None,
+            best_bid=_dec_or_none("bestBid"),
+            best_ask=_dec_or_none("bestAsk"),
         )
 
     def refresh_cache(self, force: bool = False) -> None:

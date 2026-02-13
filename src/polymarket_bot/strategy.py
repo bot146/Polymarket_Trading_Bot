@@ -24,6 +24,9 @@ class StrategyType(str, Enum):
     COPY_TRADING = "copy_trading"
     AI_PROBABILITY = "ai_probability"
     MULTI_OUTCOME_ARB = "multi_outcome_arb"
+    CONDITIONAL_ARB = "conditional_arb"
+    LIQUIDITY_REWARDS = "liquidity_rewards"
+    NEAR_RESOLUTION = "near_resolution"
 
 
 @dataclass(frozen=True)

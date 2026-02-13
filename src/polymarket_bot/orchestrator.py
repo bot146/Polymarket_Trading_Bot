@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any
 
@@ -15,12 +15,15 @@ from polymarket_bot.config import Settings
 from polymarket_bot.market_feed import EnhancedMarketFeed
 from polymarket_bot.order_book_depth import OrderBookDepthChecker
 from polymarket_bot.scanner import MarketScanner
-from polymarket_bot.strategy import StrategyRegistry, StrategySignal
+from polymarket_bot.strategy import StrategyRegistry, StrategySignal, StrategyType
 from polymarket_bot.strategies.arbitrage_strategy import ArbitrageStrategy
+from polymarket_bot.strategies.conditional_arb_strategy import ConditionalArbStrategy
 from polymarket_bot.strategies.copy_trading_strategy import CopyTradingStrategy
 from polymarket_bot.strategies.guaranteed_win_strategy import GuaranteedWinStrategy
+from polymarket_bot.strategies.liquidity_rewards_strategy import LiquidityRewardsStrategy
 from polymarket_bot.strategies.market_making_strategy import MarketMakingConfig, MarketMakingStrategy
 from polymarket_bot.strategies.multi_outcome_arb_strategy import MultiOutcomeArbStrategy
+from polymarket_bot.strategies.near_resolution_strategy import NearResolutionStrategy
 from polymarket_bot.strategies.oracle_sniping_strategy import OracleSnipingStrategy
 from polymarket_bot.strategies.sniping_strategy import SnipingConfig, SnipingStrategy
 from polymarket_bot.strategies.statistical_arbitrage_strategy import StatisticalArbitrageStrategy
@@ -43,6 +46,11 @@ class OrchestratorConfig:
     enable_copy_trading: bool = False
     enable_value_betting: bool = False  # Speculative (Kelly) — disabled
     enable_multi_outcome_arb: bool = True  # Buy all YES in a group for < $1
+    enable_conditional_arb: bool = False     # Cumulative bracket arb
+    enable_liquidity_rewards: bool = False   # Liquidity reward harvesting
+    enable_near_resolution: bool = False     # Near-resolution sniping
+    enable_arb_stacking: bool = False        # Allow N stacked positions on same arb group
+    max_arb_stacks: int = 3                  # Max stacked positions per group
     
     # Market scanning
     scan_high_volume: bool = True
@@ -173,6 +181,37 @@ class StrategyOrchestrator:
             self.registry.register(mo_arb_strategy)
             log.info("Registered: MultiOutcomeArbStrategy")
 
+        if self.config.enable_conditional_arb:
+            cond_arb_strategy = ConditionalArbStrategy(
+                min_edge_cents=self.settings.min_edge_cents,
+                max_order_usdc=self.settings.max_order_usdc,
+                taker_fee_rate=self.settings.taker_fee_rate,
+                enabled=True,
+            )
+            self.registry.register(cond_arb_strategy)
+            log.info("Registered: ConditionalArbStrategy")
+
+        if self.config.enable_liquidity_rewards:
+            liq_strategy = LiquidityRewardsStrategy(
+                max_order_usdc=self.settings.max_order_usdc,
+                maker_fee_rate=self.settings.maker_fee_rate,
+                max_position_usdc=self.settings.liquidity_rewards_max_position,
+                enabled=True,
+            )
+            self.registry.register(liq_strategy)
+            log.info("Registered: LiquidityRewardsStrategy")
+
+        if self.config.enable_near_resolution:
+            nr_strategy = NearResolutionStrategy(
+                min_edge_cents=self.settings.min_edge_cents,
+                max_order_usdc=self.settings.max_order_usdc,
+                taker_fee_rate=self.settings.taker_fee_rate,
+                max_hours_to_end=self.settings.near_resolution_max_hours,
+                enabled=True,
+            )
+            self.registry.register(nr_strategy)
+            log.info("Registered: NearResolutionStrategy")
+
     def scan_and_collect_signals(self) -> list[StrategySignal]:
         """Scan markets and collect signals from all strategies."""
         market_data = self._gather_market_data()
@@ -204,8 +243,32 @@ class StrategyOrchestrator:
             # Skip if we already have a position in this market
             condition_id = signal.opportunity.metadata.get("condition_id")
             if condition_id and condition_id in self.active_positions:
-                log.info(f"⏭️  Skipping {condition_id[:12]}... — already have active position")
-                continue
+                # Same-group stacking: allow re-execution up to max_stacks
+                strategy_type = signal.opportunity.strategy_type
+                is_stackable = strategy_type in (
+                    StrategyType.MULTI_OUTCOME_ARB,
+                    StrategyType.CONDITIONAL_ARB,
+                )
+                if self.config.enable_arb_stacking and is_stackable:
+                    count = self.active_positions.count(condition_id)
+                    if count < self.config.max_arb_stacks:
+                        log.info(
+                            "📚 Stacking %s on %s (%d/%d)",
+                            strategy_type.value,
+                            condition_id[:12],
+                            count + 1,
+                            self.config.max_arb_stacks,
+                        )
+                        # Allow through — don't skip
+                    else:
+                        log.info(
+                            "⏭️  Skipping %s — max stacks reached (%d/%d)",
+                            condition_id[:12], count, self.config.max_arb_stacks,
+                        )
+                        continue
+                else:
+                    log.info(f"⏭️  Skipping {condition_id[:12]}... — already have active position")
+                    continue
             
             # Check concurrent trade limit
             if len(self.active_positions) >= self.config.max_concurrent_trades:
@@ -298,6 +361,13 @@ class StrategyOrchestrator:
                         "active": market.active,
                         "neg_risk_market_id": market.neg_risk_market_id,
                         "group_item_title": market.group_item_title,
+                        "end_date": market.end_date,
+                        "liquidity": float(market.liquidity),
+                        "spread": float(market.spread) if market.spread is not None else None,
+                        "one_day_price_change": market.one_day_price_change,
+                        "rewards_min_size": float(market.rewards_min_size) if market.rewards_min_size is not None else None,
+                        "rewards_max_spread": float(market.rewards_max_spread) if market.rewards_max_spread is not None else None,
+                        "rewards_daily_rate": float(market.rewards_daily_rate) if market.rewards_daily_rate is not None else None,
                         "tokens": [
                             {
                                 "token_id": token.token_id,
@@ -375,8 +445,107 @@ class StrategyOrchestrator:
         
         # Filter based on constraints
         signals = self.filter_signals(signals)
+
+        # Apply graduated sizing — scale trade sizes based on stack depth
+        signals = self._apply_graduated_sizing(signals)
         
         return signals
+
+    # ------------------------------------------------------------------
+    # Graduated position sizing
+    # ------------------------------------------------------------------
+
+    def _apply_graduated_sizing(
+        self, signals: list[StrategySignal]
+    ) -> list[StrategySignal]:
+        """Scale trade sizes to build positions gradually.
+
+        First entry into a market uses ``initial_order_pct`` of max_order_usdc.
+        Each subsequent stack (if arb stacking is enabled) increases linearly
+        toward max_order_usdc.  This lets the bot probe with a small amount
+        first and commit more capital only when the edge persists.
+
+        Tier schedule (with initial_order_pct=25, max_stacks=3):
+            Stack 1: 25% of max  → $5
+            Stack 2: 62% of max  → $12.50
+            Stack 3: 100% of max → $20
+
+        Strategies that already sized below the tier target are left as-is
+        (we never *increase* a signal's size beyond what the strategy chose).
+        """
+        initial_pct = self.settings.initial_order_pct / Decimal("100")
+        min_usdc = self.settings.min_order_usdc
+        max_usdc = self.settings.max_order_usdc
+        max_stacks = self.config.max_arb_stacks
+
+        sized: list[StrategySignal] = []
+        for signal in signals:
+            condition_id = signal.opportunity.metadata.get("condition_id", "")
+            stack_count = self.active_positions.count(condition_id)  # 0 = first entry
+
+            # Compute tier fraction: lerp from initial_pct (stack 0) to 1.0 (stack max-1)
+            if max_stacks <= 1:
+                tier_frac = initial_pct
+            else:
+                tier_frac = initial_pct + (Decimal("1") - initial_pct) * Decimal(str(stack_count)) / Decimal(str(max_stacks - 1))
+            tier_frac = min(tier_frac, Decimal("1"))
+
+            tier_budget = max(min_usdc, (max_usdc * tier_frac).quantize(Decimal("0.01")))
+
+            # Only scale down — never inflate above what the strategy calculated
+            original_cost = signal.max_total_cost
+            if original_cost <= Decimal("0"):
+                sized.append(signal)
+                continue
+
+            if tier_budget >= original_cost:
+                # Strategy already sized within / below the tier budget
+                sized.append(signal)
+                continue
+
+            # Scale factor to shrink all trades proportionally
+            scale = (tier_budget / original_cost).quantize(Decimal("0.0001"))
+            if scale <= Decimal("0"):
+                continue
+
+            scaled_trades = [
+                replace(t, size=(t.size * scale).quantize(Decimal("0.01")))
+                for t in signal.trades
+            ]
+
+            # Drop if any trade size falls below minimum viable (Polymarket min ≈ 1 share)
+            if any(t.size < Decimal("1") for t in scaled_trades):
+                log.debug(
+                    "Dropping signal %s — scaled size < 1 share",
+                    condition_id[:12],
+                )
+                continue
+
+            new_cost = sum(t.size * t.price for t in scaled_trades)
+            new_return = signal.min_expected_return * scale
+            new_profit = signal.opportunity.expected_profit * scale
+
+            new_opp = replace(signal.opportunity, expected_profit=new_profit)
+            new_signal = replace(
+                signal,
+                opportunity=new_opp,
+                trades=scaled_trades,
+                max_total_cost=new_cost,
+                min_expected_return=new_return,
+            )
+
+            log.info(
+                "📐 Sized %s tier %d/%d: $%.2f → $%.2f (%.0f%%)",
+                condition_id[:12],
+                stack_count + 1,
+                max_stacks,
+                float(original_cost),
+                float(new_cost),
+                float(tier_frac * 100),
+            )
+            sized.append(new_signal)
+
+        return sized
 
     def mark_position_active(self, condition_id: str) -> None:
         """Mark a market as having an active position."""
