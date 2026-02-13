@@ -75,6 +75,7 @@ class UnifiedExecutor:
 
         # Runtime bankroll/equity cap (set by app loop from wallet snapshot/live wallet).
         self._equity_cap: Decimal | None = settings.paper_start_balance if settings.trading_mode == "paper" else None
+        self._wallet_snapshot: dict[str, float | str | None] | None = None
 
         # Hedging metrics
         self.hedge_events = 0
@@ -108,6 +109,10 @@ class UnifiedExecutor:
     def set_paper_equity_cap(self, cap: Decimal | None) -> None:
         """Backward-compatible alias for set_equity_cap."""
         self.set_equity_cap(cap)
+
+    def set_wallet_snapshot(self, snapshot: dict[str, float | str | None] | None) -> None:
+        """Set wallet snapshot for telemetry/dashboard output."""
+        self._wallet_snapshot = snapshot
 
     def execute_signal(
         self,
@@ -809,6 +814,7 @@ class UnifiedExecutor:
                 "open_gtc_total": sum(open_gtc_by_condition.values()),
                 "open_gtc_by_condition": open_gtc_by_condition,
             },
+            "wallet": self._wallet_snapshot or {},
             "circuit_breaker": self.circuit_breaker.get_stats(),
         }
         

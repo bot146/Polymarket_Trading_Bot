@@ -135,6 +135,27 @@ def _render_html(stats: dict[str, Any]) -> str:
     unrealized = portfolio.get("total_unrealized_pnl", 0)
     total_pnl = portfolio.get("total_pnl", 0)
 
+    wallet = exec_stats.get("wallet", {})
+    wallet_mode = str(wallet.get("mode", "unknown")).upper()
+    wallet_equity = wallet.get("equity")
+    wallet_start = wallet.get("starting_balance")
+    wallet_adjust = wallet.get("manual_adjustment")
+    wallet_mult = wallet.get("multiplier")
+    wallet_dyn_max = wallet.get("dynamic_max_order_usdc")
+    wallet_live_available = wallet.get("available_collateral")
+
+    wallet_equity_str = f"${wallet_equity:.2f}" if isinstance(wallet_equity, (int, float)) else "n/a"
+    wallet_start_str = f"${wallet_start:.2f}" if isinstance(wallet_start, (int, float)) else "n/a"
+    wallet_adjust_str = f"${wallet_adjust:.2f}" if isinstance(wallet_adjust, (int, float)) else "n/a"
+    wallet_mult_str = f"x{wallet_mult:.2f}" if isinstance(wallet_mult, (int, float)) else "n/a"
+    wallet_dyn_max_str = f"${wallet_dyn_max:.2f}" if isinstance(wallet_dyn_max, (int, float)) else "n/a"
+    wallet_live_available_row = ""
+    if isinstance(wallet_live_available, (int, float)):
+        wallet_live_available_row = (
+            f'<div class="metric"><span class="label">Live Available Collateral</span>'
+            f'<span class="value">${wallet_live_available:.2f}</span></div>'
+        )
+
     signals_seen = orch_stats.get("total_signals_seen", 0)
     signals_exec = orch_stats.get("total_signals_executed", 0)
     enabled = orch_stats.get("enabled_strategies", 0)
@@ -206,6 +227,17 @@ def _render_html(stats: dict[str, Any]) -> str:
     <div class="metric"><span class="label">Unrealized P&L</span><span class="value">${unrealized:.4f}</span></div>
     <div class="metric"><span class="label">Total P&L</span><span class="value {'positive' if total_pnl >= 0 else 'negative'}">${total_pnl:.4f}</span></div>
   </div>
+
+    <div class="card">
+        <h2>💼 Wallet</h2>
+        <div class="metric"><span class="label">Mode</span><span class="value">{wallet_mode}</span></div>
+        <div class="metric"><span class="label">Equity Cap</span><span class="value">{wallet_equity_str}</span></div>
+        <div class="metric"><span class="label">Base Balance</span><span class="value">{wallet_start_str}</span></div>
+        <div class="metric"><span class="label">Manual Adjustment</span><span class="value">{wallet_adjust_str}</span></div>
+        <div class="metric"><span class="label">Size Multiplier</span><span class="value">{wallet_mult_str}</span></div>
+        <div class="metric"><span class="label">Dynamic Max Order</span><span class="value">{wallet_dyn_max_str}</span></div>
+        {wallet_live_available_row}
+    </div>
 
   <div class="card">
     <h2>💼 Portfolio</h2>

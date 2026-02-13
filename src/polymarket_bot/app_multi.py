@@ -547,6 +547,7 @@ def main() -> None:
                     multiplier = snap.multiplier
                     starting_balance = snap.starting_balance
                     manual_adjustment = snap.manual_adjustment
+                    available_collateral_value: _Decimal | None = None
                 else:
                     # LIVE: use real collateral balance as hard cap source and include
                     # currently-open cost basis to estimate account equity.
@@ -575,6 +576,7 @@ def main() -> None:
                     if available_collateral is None:
                         # Conservative fallback until first successful wallet read.
                         available_collateral = _Decimal(str(settings.paper_start_balance))
+                    available_collateral_value = available_collateral
 
                     # Mark-to-market live equity cap:
                     # cash/collateral + marked value of open positions.
@@ -596,12 +598,15 @@ def main() -> None:
                     initial_order_pct=runtime_settings.initial_order_pct,
                 )
                 last_wallet_snapshot = {
+                    "mode": settings.trading_mode,
                     "equity": float(equity_cap),
                     "starting_balance": float(starting_balance),
                     "manual_adjustment": float(manual_adjustment),
                     "multiplier": float(multiplier),
                     "dynamic_max_order_usdc": float(dynamic_max),
+                    "available_collateral": float(available_collateral_value) if available_collateral_value is not None else None,
                 }
+                executor.set_wallet_snapshot(last_wallet_snapshot)
 
             signals = orchestrator.run_once()
 
