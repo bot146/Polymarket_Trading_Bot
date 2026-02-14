@@ -90,12 +90,21 @@ class PositionCloser:
             # Individual bracket exits break the arb — they should only exit
             # when the market resolves (one bracket pays $1, rest pay $0).
             # Same applies to conditional arb (partial bracket sets).
+            #
+            # However — as a capital-recycling safety valve — if the entire
+            # group has been held longer than max_position_age_hours, force-
+            # close all brackets in the group at their current mid price.
             if position.strategy in ("multi_outcome_arb", "conditional_arb"):
                 continue
 
             if self._should_close_position(position, price_data):
                 result = self.close_position(position, price_data)
                 results.append(result)
+
+        # Arb group age-based exit: close entire groups that exceeded max age.
+        if self.max_position_age_seconds > 0:
+            arb_results = self._check_arb_group_age_exit(open_positions, price_data)
+            results.extend(arb_results)
         
         return results
     
@@ -235,27 +244,20 @@ class PositionCloser:
                 realized_pnl=pnl,
             )
         else:
-            # Live mode: Would need to call settlement/redemption endpoint
-            # For now, mark as closed at $1
-            pnl = self.position_manager.close_position(
-                position.position_id,
-                exit_price=redemption_value,
-            )
-            
-            self.redemption_count += 1
-            self.total_realized_pnl += pnl
-            
+            # Live mode: do NOT book synthetic redemptions in the local ledger.
+            # Settlement/redemption must be confirmed externally; otherwise we'd
+            # create phantom realized P&L and drift from wallet truth.
             log.warning(
-                f"✅ REDEEMED [{position.strategy}]: "
-                f"pos={position.position_id} qty={position.quantity} "
-                f"P&L=${pnl:.4f}"
+                "⚠️  LIVE REDEMPTION PENDING [%s]: pos=%s qty=%s — external settlement required",
+                position.strategy,
+                position.position_id,
+                position.quantity,
             )
-            
             return CloseResult(
-                success=True,
+                success=False,
                 position_id=position.position_id,
-                reason="redeemed",
-                realized_pnl=pnl,
+                reason="live_redemption_pending_external_settlement",
+                error="No live redemption endpoint wired; position left redeemable",
             )
     
     def _paper_close(self, position: Position, exit_price: Decimal) -> CloseResult:
@@ -303,15 +305,41 @@ class PositionCloser:
             
             # Sign and post
             signed_order = self.client.create_order(order_args)
-            response = self.client.post_order(signed_order, orderType="IOC")  # type: ignore[arg-type]
+            response = self.client.post_order(signed_order, orderType="FOK")  # type: ignore[arg-type]
             
             # Extract order ID
             order_id = self._extract_order_id(response)
+            if not order_id:
+                return CloseResult(
+                    success=False,
+                    position_id=position.position_id,
+                    reason="live_close_missing_order_id",
+                    error="Order posted but no order ID returned",
+                )
+
+            filled_size, filled_price, status = self._verify_live_close_fill(
+                order_id=order_id,
+                post_response=response,
+                requested_size=position.quantity,
+                requested_price=exit_price,
+            )
+
+            if filled_size < position.quantity:
+                return CloseResult(
+                    success=False,
+                    position_id=position.position_id,
+                    reason="live_close_not_fully_filled",
+                    order_id=order_id,
+                    error=(
+                        f"status={status} filled={filled_size} requested={position.quantity}; "
+                        "position left open"
+                    ),
+                )
             
             # Close position
             pnl = self.position_manager.close_position(
                 position.position_id,
-                exit_price=exit_price,
+                exit_price=filled_price,
                 exit_order_id=order_id,
             )
             
@@ -320,7 +348,7 @@ class PositionCloser:
             
             log.warning(
                 f"✅ LIVE CLOSE [{position.strategy}]: "
-                f"pos={position.position_id} P&L=${pnl:.4f} order={order_id}"
+                f"pos={position.position_id} P&L=${pnl:.4f} order={order_id} status={status}"
             )
             
             return CloseResult(
@@ -348,6 +376,147 @@ class PositionCloser:
             return getattr(response, "orderID", None) or getattr(response, "orderId", None)
         except Exception:
             return None
+
+    def _verify_live_close_fill(
+        self,
+        *,
+        order_id: str,
+        post_response: object,
+        requested_size: Decimal,
+        requested_price: Decimal,
+    ) -> tuple[Decimal, Decimal, str]:
+        """Verify full close fill using post response and brief get_order polling."""
+        import time as _time
+
+        filled_size, filled_price, status = self._extract_fill_details(
+            payload=post_response,
+            requested_size=requested_size,
+            requested_price=requested_price,
+        )
+        terminal = {
+            "filled",
+            "matched",
+            "partially_filled",
+            "partial",
+            "canceled",
+            "cancelled",
+            "rejected",
+            "expired",
+            "failed",
+        }
+        if filled_size > Decimal("0") or status in terminal:
+            return filled_size, filled_price, status
+
+        for _ in range(3):
+            _time.sleep(0.2)
+            try:
+                payload = self.client.get_order(order_id) if self.client else None
+            except Exception:
+                continue
+            filled_size, filled_price, status = self._extract_fill_details(
+                payload=payload,
+                requested_size=requested_size,
+                requested_price=requested_price,
+            )
+            if filled_size > Decimal("0") or status in terminal:
+                return filled_size, filled_price, status
+
+        return filled_size, filled_price, status
+
+    def _extract_fill_details(
+        self,
+        *,
+        payload: object,
+        requested_size: Decimal,
+        requested_price: Decimal,
+    ) -> tuple[Decimal, Decimal, str]:
+        """Extract (filled_size, fill_price, status) from variable payload shapes."""
+        data: Any = payload
+        if hasattr(payload, "model_dump"):
+            try:
+                data = payload.model_dump()
+            except Exception:
+                data = payload
+        elif hasattr(payload, "__dict__"):
+            try:
+                data = dict(getattr(payload, "__dict__"))
+            except Exception:
+                data = payload
+
+        if isinstance(data, dict):
+            if isinstance(data.get("order"), dict):
+                data = data["order"]
+            elif isinstance(data.get("data"), dict):
+                data = data["data"]
+
+        status = "unknown"
+        if isinstance(data, dict):
+            s = data.get("status") or data.get("state") or data.get("order_status")
+            if s is not None:
+                status = str(s).strip().lower()
+
+        def _pick_decimal(obj: object, keys: set[str]) -> Decimal | None:
+            keyset = {k.lower() for k in keys}
+
+            def _to_decimal(v: object) -> Decimal | None:
+                if v is None:
+                    return None
+                try:
+                    return Decimal(str(v))
+                except Exception:
+                    return None
+
+            def _walk(node: object) -> Decimal | None:
+                if isinstance(node, dict):
+                    for k, v in node.items():
+                        if str(k).lower() in keyset:
+                            d = _to_decimal(v)
+                            if d is not None:
+                                return d
+                    for v in node.values():
+                        d = _walk(v)
+                        if d is not None:
+                            return d
+                elif isinstance(node, list):
+                    for item in node:
+                        d = _walk(item)
+                        if d is not None:
+                            return d
+                return None
+
+            return _walk(obj)
+
+        size = _pick_decimal(
+            data,
+            {
+                "size_matched",
+                "matched_size",
+                "filled_size",
+                "filled",
+                "executed_size",
+                "filledamount",
+                "sizefilled",
+                "totalsizefilled",
+            },
+        )
+        price = _pick_decimal(
+            data,
+            {
+                "avg_price",
+                "average_price",
+                "filled_price",
+                "execution_price",
+                "match_price",
+                "price",
+            },
+        )
+
+        if size is None:
+            size = requested_size if status in {"filled", "matched", "executed"} else Decimal("0")
+        if price is None or price <= 0:
+            price = requested_price
+
+        return size, price, status
     
     def get_stats(self) -> dict[str, Any]:
         """Get position closer statistics."""
@@ -359,3 +528,57 @@ class PositionCloser:
             "time_based_closes": self.time_based_closes,
             "total_realized_pnl": float(self.total_realized_pnl),
         }
+
+    # ------------------------------------------------------------------
+    # Arb group age-based exit
+    # ------------------------------------------------------------------
+
+    def _check_arb_group_age_exit(
+        self,
+        open_positions: list[Position],
+        price_data: dict[str, Decimal],
+    ) -> list[CloseResult]:
+        """Force-close entire arb groups that exceeded max_position_age.
+
+        Without this, arb positions (which skip normal exit rules) could lock up
+        capital forever if the resolution monitor misses a market.
+
+        The exit uses the current mid-price for each bracket so P&L reflects
+        actual market conditions.
+        """
+        import time as _time
+
+        results: list[CloseResult] = []
+        now = _time.time()
+
+        arb_positions = [
+            p for p in open_positions
+            if p.strategy in ("multi_outcome_arb", "conditional_arb")
+        ]
+        if not arb_positions:
+            return results
+
+        # Group by condition_id.
+        groups: dict[str, list[Position]] = {}
+        for p in arb_positions:
+            groups.setdefault(p.condition_id, []).append(p)
+
+        for cid, group_positions in groups.items():
+            oldest_age = max(now - p.entry_time for p in group_positions)
+            if oldest_age <= self.max_position_age_seconds:
+                continue
+
+            log.warning(
+                "⏰ ARB GROUP AGE EXIT: %s (%d legs, oldest=%.1fh > max=%.1fh) — force-closing",
+                cid[:12],
+                len(group_positions),
+                oldest_age / 3600,
+                self.max_position_age_seconds / 3600,
+            )
+
+            for p in group_positions:
+                exit_price = price_data.get(p.token_id, p.entry_price)
+                result = self.close_position(p, price_data)
+                results.append(result)
+
+        return results

@@ -248,6 +248,8 @@ class ConditionalArbStrategy(Strategy):
                 "upper_cost": float(upper_cost),
                 "edge_cents": float(edge_cents),
                 "bracket_labels": [bd["label"] for bd in upper_brackets],
+                # Per-bracket Gamma condition_ids for resolution monitoring.
+                "bracket_condition_ids": {bd["token_id"]: bd["condition_id"] for bd in upper_brackets},
             },
         )
 

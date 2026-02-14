@@ -199,6 +199,8 @@ class MultiOutcomeArbStrategy(Strategy):
                     "edge_cents": float(edge_cents),
                     "total_fees_pct": float(self.taker_fee_rate * 100),
                     "bracket_labels": [bt["label"] for bt in bracket_trades],
+                    # Per-bracket Gamma condition_ids for resolution monitoring.
+                    "bracket_condition_ids": {bt["token_id"]: bt["condition_id"] for bt in bracket_trades},
                 },
             )
 

@@ -58,7 +58,18 @@ def print_banner():
 ║                                                              ║
 ╚══════════════════════════════════════════════════════════════╝
 """
-    print(banner)
+    try:
+        print(banner)
+    except UnicodeEncodeError:
+        fallback = (
+            "\n"
+            "==============================================================\n"
+            "  POLYMARKET MULTI-STRATEGY TRADING BOT\n"
+            "  Full Trade Lifecycle: Entry -> Monitoring -> Exit\n"
+            "  Strategies: Arbitrage, Guaranteed Win, Stat Arb\n"
+            "==============================================================\n"
+        )
+        print(fallback)
 
 
 def print_stats(
@@ -498,6 +509,12 @@ def main() -> None:
                 resolution_events = resolution_monitor.check_resolutions()
                 if resolution_events:
                     log.info(f"🎯 Detected {len(resolution_events)} newly resolved markets")
+                    # Sync orchestrator dedup state: mark affected positions as
+                    # closed so the condition_id slot opens up for new signals.
+                    for ev in resolution_events:
+                        for _pid in ev.affected_positions:
+                            if ev.condition_id:
+                                orchestrator.mark_position_closed(ev.condition_id)
                 last_resolution_check = loop_start
             
             # Check and close positions
@@ -528,10 +545,17 @@ def main() -> None:
                 if close_results:
                     successful_closes = [r for r in close_results if r.success]
                     if successful_closes:
+                        realized_batch = _Decimal("0")
                         for r in successful_closes:
                             cid = pos_by_id.get(r.position_id)
                             if cid:
                                 orchestrator.mark_position_closed(cid)
+                            if r.realized_pnl is not None:
+                                realized_batch += _Decimal(str(r.realized_pnl))
+
+                        if realized_batch != _Decimal("0"):
+                            executor.record_realized_trade_pnl(realized_batch)
+
                         log.info(f"✅ Closed {len(successful_closes)} positions")
                 last_position_close_check = loop_start
             
@@ -543,7 +567,13 @@ def main() -> None:
                     paper_wallet.refresh()
                     snap = paper_wallet.snapshot(portfolio_stats=portfolio)
                     paper_wallet.maybe_log_tier_change(snap)
-                    equity_cap = snap.equity
+                    # Sizing equity includes unrealized (determines multiplier tier).
+                    sizing_equity = snap.equity
+                    # Bankroll cap is *spendable* capital: starting + realized only.
+                    # Unrealized gains are locked in open positions and can't fund
+                    # new buys — just like a real wallet.
+                    realized_pnl = _Decimal(str(portfolio.get("total_realized_pnl", 0)))
+                    equity_cap = snap.starting_balance + snap.manual_adjustment + realized_pnl
                     multiplier = snap.multiplier
                     starting_balance = snap.starting_balance
                     manual_adjustment = snap.manual_adjustment
@@ -578,19 +608,24 @@ def main() -> None:
                         available_collateral = _Decimal(str(settings.paper_start_balance))
                     available_collateral_value = available_collateral
 
-                    # Mark-to-market live equity cap:
-                    # cash/collateral + marked value of open positions.
-                    equity_cap = (available_collateral + open_cost + unrealized_pnl).quantize(_Decimal("0.01"))
+                    # Bankroll cap = cash + deployed cost (NOT unrealized gains).
+                    # This mirrors real wallet behavior: you can't spend unrealized
+                    # profits until you close positions.
+                    equity_cap = (available_collateral + open_cost).quantize(_Decimal("0.01"))
                     if equity_cap < _Decimal("0"):
                         equity_cap = _Decimal("0")
+                    # Sizing tiers use full mark-to-market equity (including
+                    # unrealized) to scale position sizes, matching live behavior.
+                    sizing_equity = (available_collateral + open_cost + unrealized_pnl).quantize(_Decimal("0.01"))
                     multiplier, _tier_floor = _compute_multiplier_for_equity(
-                        equity_cap,
+                        sizing_equity,
                         settings.paper_sizing_tiers,
                     )
                     starting_balance = available_collateral
                     manual_adjustment = _Decimal("0")
 
                 executor.set_equity_cap(equity_cap)
+                executor.update_circuit_breaker_portfolio_value(sizing_equity)
                 dynamic_max = (runtime_settings.max_order_usdc * multiplier).quantize(_Decimal("0.01"))
                 orchestrator.set_dynamic_sizing_params(
                     max_order_usdc=dynamic_max,
@@ -600,6 +635,7 @@ def main() -> None:
                 last_wallet_snapshot = {
                     "mode": settings.trading_mode,
                     "equity": float(equity_cap),
+                    "sizing_equity": float(sizing_equity),
                     "starting_balance": float(starting_balance),
                     "manual_adjustment": float(manual_adjustment),
                     "multiplier": float(multiplier),

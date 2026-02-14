@@ -100,7 +100,7 @@ def test_orchestrator_prefers_wss_best_ask_over_gamma_price(monkeypatch):
     assert t1["best_bid"] == 0.50
 
 
-def test_orchestrator_falls_back_to_gamma_price_when_no_best_ask(monkeypatch):
+def test_orchestrator_requires_executable_book_when_no_best_ask(monkeypatch):
     cfg = OrchestratorConfig(enable_arbitrage=False, enable_guaranteed_win=False, enable_stat_arb=False, enable_sniping=False)
     orch = StrategyOrchestrator(cast(Any, _Settings()), cfg)
 
@@ -121,7 +121,5 @@ def test_orchestrator_falls_back_to_gamma_price_when_no_best_ask(monkeypatch):
 
     data = orch._gather_market_data()
     t1 = data["markets"][0]["tokens"][0]
-    assert t1["best_ask"] == 0.55
-    # best_bid now also falls back to Gamma price (same as best_ask) so strategies
-    # that require both sides (market-making, sniping) aren't starved.
-    assert t1["best_bid"] == 0.55
+    assert t1["best_ask"] is None
+    assert t1["best_bid"] is None

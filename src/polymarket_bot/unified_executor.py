@@ -10,6 +10,7 @@ import logging
 import time
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import OrderArgs
@@ -113,6 +114,14 @@ class UnifiedExecutor:
     def set_wallet_snapshot(self, snapshot: dict[str, float | str | None] | None) -> None:
         """Set wallet snapshot for telemetry/dashboard output."""
         self._wallet_snapshot = snapshot
+
+    def record_realized_trade_pnl(self, pnl: Decimal) -> None:
+        """Record realized P&L into the circuit breaker."""
+        self.circuit_breaker.record_trade_result(pnl=pnl)
+
+    def update_circuit_breaker_portfolio_value(self, value: Decimal) -> None:
+        """Update portfolio mark-to-market value for drawdown checks."""
+        self.circuit_breaker.update_portfolio_value(value)
 
     def execute_signal(
         self,
@@ -280,8 +289,7 @@ class UnifiedExecutor:
             # Unknown order type: do nothing.
             continue
 
-        # Record theoretical PnL for circuit breaker.
-        self.circuit_breaker.record_trade_result(pnl=profit)
+        self.success_count += 1
 
         log.warning(
             f"📄 PAPER TRADE [{strategy_type}]: "
@@ -588,6 +596,14 @@ class UnifiedExecutor:
             outcome = "NO"
 
         if fill.side == "BUY":
+            # Resolve per-bracket Gamma condition_id from signal metadata so the
+            # resolution monitor can query each bracket independently.
+            bracket_cid_map = metadata.get("bracket_condition_ids", {})
+            bracket_cid = bracket_cid_map.get(fill.token_id)
+            pos_metadata = dict(metadata)
+            if bracket_cid:
+                pos_metadata["bracket_condition_id"] = bracket_cid
+
             self.position_manager.open_position(
                 condition_id=condition_id,
                 token_id=fill.token_id,
@@ -596,7 +612,7 @@ class UnifiedExecutor:
                 entry_price=fill.fill_price,
                 quantity=fill.fill_size,
                 entry_order_id=fill.order_id,
-                metadata=metadata,
+                metadata=pos_metadata,
             )
             return
 
@@ -703,12 +719,52 @@ class UnifiedExecutor:
                 
                 # Extract order ID
                 order_id = self._extract_order_id(response)
-                if order_id:
-                    order_ids.append(order_id)
+                if not order_id:
+                    self.failure_count += 1
+                    return ExecutionResult(
+                        success=False,
+                        reason="live_missing_order_id",
+                        signal=signal,
+                        error="Order posted but no order ID returned",
+                    )
+
+                order_ids.append(order_id)
+
+                filled_size, filled_price, fill_status = self._verify_live_fill(
+                    order_id=order_id,
+                    post_response=response,
+                    requested_size=trade.size,
+                    requested_price=trade.price,
+                )
+
+                if filled_size <= Decimal("0"):
+                    self.failure_count += 1
+                    return ExecutionResult(
+                        success=False,
+                        reason="live_not_filled",
+                        signal=signal,
+                        order_ids=order_ids,
+                        position_ids=position_ids if position_ids else None,
+                        error=f"order_id={order_id} status={fill_status}",
+                    )
+
+                if trade.order_type in {"FOK", "IOC"} and filled_size < trade.size:
+                    # Position is still booked at the actual filled size below,
+                    # but signal execution is marked failed because strategy
+                    # assumptions were violated.
+                    partial_fill = True
+                else:
+                    partial_fill = False
                 
                 log.info(
-                    f"✅ LIVE ORDER: {trade.side} {trade.size:.2f} @ ${trade.price:.4f} "
-                    f"order_id={order_id}"
+                    "✅ LIVE ORDER FILLED: %s %.2f/%.2f @ $%.4f (limit $%.4f) order_id=%s status=%s",
+                    trade.side,
+                    float(filled_size),
+                    float(trade.size),
+                    float(filled_price),
+                    float(trade.price),
+                    order_id,
+                    fill_status,
                 )
                 
                 # Track position if buy order and position manager available
@@ -719,17 +775,36 @@ class UnifiedExecutor:
                     elif "no_token_id" in signal.opportunity.metadata and trade.token_id == signal.opportunity.metadata["no_token_id"]:
                         outcome = "NO"
                     
+                    # Resolve per-bracket Gamma condition_id so the resolution
+                    # monitor can query each bracket independently.
+                    pos_metadata = dict(signal.opportunity.metadata)
+                    bracket_cid_map = pos_metadata.get("bracket_condition_ids", {})
+                    bracket_cid = bracket_cid_map.get(trade.token_id)
+                    if bracket_cid:
+                        pos_metadata["bracket_condition_id"] = bracket_cid
+
                     position = self.position_manager.open_position(
                         condition_id=condition_id,
                         token_id=trade.token_id,
                         outcome=outcome,
                         strategy=strategy_type,
-                        entry_price=trade.price,
-                        quantity=trade.size,
+                        entry_price=filled_price,
+                        quantity=filled_size,
                         entry_order_id=order_id,
-                        metadata=signal.opportunity.metadata,
+                        metadata=pos_metadata,
                     )
                     position_ids.append(position.position_id)
+
+                if partial_fill:
+                    self.failure_count += 1
+                    return ExecutionResult(
+                        success=False,
+                        reason="live_partial_fill",
+                        signal=signal,
+                        order_ids=order_ids,
+                        position_ids=position_ids if position_ids else None,
+                        error=f"order_id={order_id} filled={filled_size} requested={trade.size}",
+                    )
             
             self.success_count += 1
             
@@ -766,6 +841,164 @@ class UnifiedExecutor:
         except Exception as e:
             log.warning(f"Failed to extract order ID from response: {e}")
             return None
+
+    def _verify_live_fill(
+        self,
+        *,
+        order_id: str,
+        post_response: object,
+        requested_size: Decimal,
+        requested_price: Decimal,
+    ) -> tuple[Decimal, Decimal, str]:
+        """Verify live order fill using post response and order-status polling."""
+        filled_size, filled_price, status = self._extract_fill_details(
+            payload=post_response,
+            requested_size=requested_size,
+            requested_price=requested_price,
+        )
+
+        terminal_states = {
+            "filled",
+            "matched",
+            "partially_filled",
+            "partial",
+            "canceled",
+            "cancelled",
+            "rejected",
+            "expired",
+            "failed",
+        }
+        if filled_size > Decimal("0") or status in terminal_states:
+            return filled_size, filled_price, status
+
+        # Post-order payload may not include final match state immediately.
+        # Poll get_order briefly to confirm real fill outcome.
+        for _ in range(3):
+            time.sleep(0.2)
+            try:
+                order_payload = self.client.get_order(order_id) if self.client else None
+            except Exception:
+                continue
+
+            filled_size, filled_price, status = self._extract_fill_details(
+                payload=order_payload,
+                requested_size=requested_size,
+                requested_price=requested_price,
+            )
+            if filled_size > Decimal("0") or status in terminal_states:
+                return filled_size, filled_price, status
+
+        return filled_size, filled_price, status
+
+    def _extract_fill_details(
+        self,
+        *,
+        payload: object,
+        requested_size: Decimal,
+        requested_price: Decimal,
+    ) -> tuple[Decimal, Decimal, str]:
+        """Extract (filled_size, fill_price, status) from variable payload shapes."""
+        data = self._coerce_payload(payload)
+        status = "unknown"
+
+        if isinstance(data, dict):
+            status_value = data.get("status") or data.get("state") or data.get("order_status")
+            if status_value is not None:
+                status = str(status_value).strip().lower()
+
+        size = self._extract_decimal_by_keys(
+            data,
+            {
+                "size_matched",
+                "matched_size",
+                "filled_size",
+                "filled",
+                "executed_size",
+                "filledamount",
+                "sizefilled",
+                "totalsizefilled",
+            },
+        )
+        price = self._extract_decimal_by_keys(
+            data,
+            {
+                "avg_price",
+                "average_price",
+                "filled_price",
+                "execution_price",
+                "match_price",
+                "price",
+            },
+        )
+
+        if size is None:
+            # Some payloads only expose terminal status without explicit matched size.
+            if status in {"filled", "matched", "executed"}:
+                size = requested_size
+            else:
+                size = Decimal("0")
+
+        if price is None or price <= 0:
+            price = requested_price
+
+        return size, price, status
+
+    def _coerce_payload(self, payload: object) -> Any:
+        """Normalize payload objects into plain dict/list/scalars."""
+        if payload is None:
+            return {}
+        if hasattr(payload, "model_dump"):
+            try:
+                return payload.model_dump()  # type: ignore[no-any-return]
+            except Exception:
+                pass
+        if isinstance(payload, dict):
+            # Common response wrappers.
+            if isinstance(payload.get("order"), dict):
+                return payload["order"]
+            if isinstance(payload.get("data"), dict):
+                return payload["data"]
+            return payload
+        if hasattr(payload, "__dict__"):
+            try:
+                return dict(getattr(payload, "__dict__"))
+            except Exception:
+                return {}
+        return payload
+
+    def _extract_decimal_by_keys(self, payload: object, keys: set[str]) -> Decimal | None:
+        """Recursively find first decimal value for any candidate key."""
+        keyset = {k.lower() for k in keys}
+
+        def _to_decimal(v: object) -> Decimal | None:
+            if v is None:
+                return None
+            try:
+                return Decimal(str(v))
+            except Exception:
+                return None
+
+        def _walk(node: object) -> Decimal | None:
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    if str(k).strip().lower() in keyset:
+                        d = _to_decimal(v)
+                        if d is not None:
+                            return d
+                for v in node.values():
+                    d = _walk(v)
+                    if d is not None:
+                        return d
+                return None
+            if isinstance(node, list):
+                for item in node:
+                    d = _walk(item)
+                    if d is not None:
+                        return d
+                return None
+            return None
+
+        return _walk(payload)
 
     def get_stats(self) -> dict:
         """Get executor statistics including profitability and portfolio."""

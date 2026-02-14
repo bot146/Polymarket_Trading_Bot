@@ -38,7 +38,7 @@ class OrchestratorConfig:
     scan_interval: float = 2.0  # Seconds between scans
     max_concurrent_trades: int = 5  # Max number of simultaneous positions
     enable_arbitrage: bool = True
-    enable_guaranteed_win: bool = True
+    enable_guaranteed_win: bool = False
     enable_stat_arb: bool = False  # Speculative — disabled
     enable_sniping: bool = False  # Speculative — disabled
     enable_market_making: bool = False  # Speculative — disabled
@@ -344,7 +344,7 @@ class StrategyOrchestrator:
                 # For negRisk tokens the CLOB book gives the real executable ask,
                 # which is what multi-outcome arb needs. WSS mid-prices are useful
                 # for speculative strategies but can mask arb edges.
-                def _resolve_best_ask(token_id: str, gamma_price: float) -> float:
+                def _resolve_best_ask(token_id: str) -> float | None:
                     tid = str(token_id)
                     # 1. CLOB order book (most accurate for execution)
                     if tid in clob_best_ask_map and clob_best_ask_map[tid] is not None:
@@ -352,8 +352,8 @@ class StrategyOrchestrator:
                     # 2. WSS feed (real-time but may differ from executable ask)
                     if tid in best_ask_map and best_ask_map[tid] is not None:
                         return float(best_ask_map[tid])
-                    # 3. Gamma mid-price (fallback)
-                    return gamma_price
+                    # No executable ask available.
+                    return None
 
                 # Convert to dict format for strategies
                 for market in high_vol_markets:
@@ -379,9 +379,9 @@ class StrategyOrchestrator:
                                 "best_bid": (
                                     float(best_bid_map[str(token.token_id)])
                                     if str(token.token_id) in best_bid_map and best_bid_map[str(token.token_id)] is not None
-                                    else float(token.price)
+                                    else None
                                 ),
-                                "best_ask": _resolve_best_ask(token.token_id, float(token.price)),
+                                "best_ask": _resolve_best_ask(token.token_id),
                                 "volume": float(token.volume),
                             }
                             for token in market.tokens

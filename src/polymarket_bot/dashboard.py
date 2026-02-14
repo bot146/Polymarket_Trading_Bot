@@ -138,6 +138,7 @@ def _render_html(stats: dict[str, Any]) -> str:
     wallet = exec_stats.get("wallet", {})
     wallet_mode = str(wallet.get("mode", "unknown")).upper()
     wallet_equity = wallet.get("equity")
+    wallet_sizing_equity = wallet.get("sizing_equity")
     wallet_start = wallet.get("starting_balance")
     wallet_adjust = wallet.get("manual_adjustment")
     wallet_mult = wallet.get("multiplier")
@@ -145,6 +146,7 @@ def _render_html(stats: dict[str, Any]) -> str:
     wallet_live_available = wallet.get("available_collateral")
 
     wallet_equity_str = f"${wallet_equity:.2f}" if isinstance(wallet_equity, (int, float)) else "n/a"
+    wallet_sizing_str = f"${wallet_sizing_equity:.2f}" if isinstance(wallet_sizing_equity, (int, float)) else "n/a"
     wallet_start_str = f"${wallet_start:.2f}" if isinstance(wallet_start, (int, float)) else "n/a"
     wallet_adjust_str = f"${wallet_adjust:.2f}" if isinstance(wallet_adjust, (int, float)) else "n/a"
     wallet_mult_str = f"x{wallet_mult:.2f}" if isinstance(wallet_mult, (int, float)) else "n/a"
@@ -231,7 +233,8 @@ def _render_html(stats: dict[str, Any]) -> str:
     <div class="card">
         <h2>💼 Wallet</h2>
         <div class="metric"><span class="label">Mode</span><span class="value">{wallet_mode}</span></div>
-        <div class="metric"><span class="label">Equity Cap</span><span class="value">{wallet_equity_str}</span></div>
+        <div class="metric"><span class="label">Bankroll Cap</span><span class="value">{wallet_equity_str}</span></div>
+        <div class="metric"><span class="label">Sizing Equity</span><span class="value">{wallet_sizing_str}</span></div>
         <div class="metric"><span class="label">Base Balance</span><span class="value">{wallet_start_str}</span></div>
         <div class="metric"><span class="label">Manual Adjustment</span><span class="value">{wallet_adjust_str}</span></div>
         <div class="metric"><span class="label">Size Multiplier</span><span class="value">{wallet_mult_str}</span></div>

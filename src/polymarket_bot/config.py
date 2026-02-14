@@ -25,7 +25,7 @@ class Settings:
 
     # Strategy toggles
     enable_arbitrage: bool = True
-    enable_guaranteed_win: bool = True
+    enable_guaranteed_win: bool = False
     enable_multi_outcome_arb: bool = True
     enable_stat_arb: bool = False
     enable_sniping: bool = False
@@ -170,7 +170,7 @@ def load_settings(env_file: str | None = None) -> Settings:
         max_concurrent_trades=int(os.getenv("MAX_CONCURRENT_TRADES", "5")),
 
         enable_arbitrage=parse_bool(os.getenv("ENABLE_ARBITRAGE"), True),
-        enable_guaranteed_win=parse_bool(os.getenv("ENABLE_GUARANTEED_WIN"), True),
+        enable_guaranteed_win=parse_bool(os.getenv("ENABLE_GUARANTEED_WIN"), False),
         enable_multi_outcome_arb=parse_bool(os.getenv("ENABLE_MULTI_OUTCOME_ARB"), True),
         enable_stat_arb=parse_bool(os.getenv("ENABLE_STAT_ARB"), False),
         enable_sniping=parse_bool(os.getenv("ENABLE_SNIPING"), False),
