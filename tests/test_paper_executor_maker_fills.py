@@ -42,6 +42,8 @@ def test_paper_executor_gtc_does_not_open_position_until_fill(tmp_path) -> None:
     fills = ex.on_market_update(token_id="t_yes", best_bid=Decimal("0.39"), best_ask=Decimal("0.40"))
     assert len(fills) == 1
     assert len(pm.positions) == 1
+    pos = next(iter(pm.positions.values()))
+    assert pos.condition_id == "c1"
 
 
 def test_paper_executor_ioc_fills_only_when_marketable(tmp_path) -> None:

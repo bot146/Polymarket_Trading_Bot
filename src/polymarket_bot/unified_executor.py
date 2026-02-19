@@ -587,6 +587,13 @@ class UnifiedExecutor:
             condition_id = signal.opportunity.metadata.get("condition_id", "unknown")
             strategy_type = signal.opportunity.strategy_type.value
             metadata = dict(signal.opportunity.metadata)
+        else:
+            # Maker fills (GTC) are applied on later market updates without the
+            # original signal object. Recover condition_id from the blotter
+            # order so resolution monitoring can match these positions.
+            paper_order = self.paper_blotter.get(fill.order_id)
+            if paper_order and paper_order.condition_id:
+                condition_id = str(paper_order.condition_id)
 
         # Determine outcome.
         outcome = metadata.get("outcome", "UNKNOWN")

@@ -152,11 +152,25 @@ class ResolutionMonitor:
         resolved_market = None
         resolved_bcid: str | None = None
 
-        for bcid, _bracket_positions in bracket_cids.items():
+        for bcid, bracket_positions in bracket_cids.items():
             try:
                 market = self.scanner.get_market(bcid)
             except Exception:
-                continue
+                market = None
+
+            # Fallback: resolve bracket market by token_id if condition-id lookup
+            # isn't available in Gamma for this bracket id format.
+            if market is None:
+                get_by_token = getattr(self.scanner, "get_market_by_token", None)
+                if callable(get_by_token):
+                    for pos in bracket_positions:
+                        try:
+                            market = get_by_token(pos.token_id)
+                        except Exception:
+                            market = None
+                        if market is not None:
+                            break
+
             if not market:
                 continue
             if market.resolved:
@@ -166,12 +180,12 @@ class ResolutionMonitor:
                     market.winning_outcome,
                     group_condition_id[:12],
                 )
-                resolved_winner = market.winning_outcome
+                resolved_winner = str(market.winning_outcome or "YES")
                 resolved_market = market
                 resolved_bcid = bcid
                 break  # One resolved bracket is enough to settle the entire group.
 
-        if resolved_winner is None or resolved_market is None or resolved_bcid is None:
+        if resolved_market is None or resolved_bcid is None:
             return events
 
         # Settle the entire arb group.
@@ -189,7 +203,10 @@ class ResolutionMonitor:
         # Determine which positions are winners vs losers.
         for p in positions:
             p_bcid = (p.metadata or {}).get("bracket_condition_id")
-            if p_bcid == resolved_bcid and resolved_winner and p.outcome.upper() in (resolved_winner.upper(), "YES"):
+            # Arb strategies buy YES on each bracket; the winning bracket is
+            # simply the resolved bracket condition_id, regardless of the
+            # stored `outcome` label (which may be UNKNOWN in legacy entries).
+            if p_bcid == resolved_bcid:
                 # This bracket won — shares worth $1.
                 self.position_manager.mark_redeemable(p.position_id)
                 log.info(

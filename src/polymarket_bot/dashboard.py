@@ -119,13 +119,13 @@ def _render_html(stats: dict[str, Any]) -> str:
     total_exec = exec_stats.get("total_executions", 0)
     successful = exec_stats.get("successful", 0)
     failed = exec_stats.get("failed", 0)
-    paper_profit = exec_stats.get("paper_total_profit", 0)
-    paper_cost = exec_stats.get("paper_total_cost", 0)
-    paper_roi = exec_stats.get("paper_roi", 0)
+    expected_profit = exec_stats.get("paper_total_profit", 0)
+    expected_cost = exec_stats.get("paper_total_cost", 0)
+    expected_roi = exec_stats.get("paper_roi", 0)
 
     cb = exec_stats.get("circuit_breaker", {})
     cb_state = cb.get("state", "unknown")
-    cb_daily = cb.get("daily_loss", 0)
+    cb_daily = cb.get("daily_pnl", 0)
     cb_dd = cb.get("drawdown_pct", 0)
     cb_consec = cb.get("consecutive_losses", 0)
 
@@ -162,7 +162,7 @@ def _render_html(stats: dict[str, Any]) -> str:
     signals_exec = orch_stats.get("total_signals_executed", 0)
     enabled = orch_stats.get("enabled_strategies", 0)
 
-    # Strategy breakdown
+    # Strategy breakdown (expected/theoretical from signals)
     strat_rows = ""
     by_strat = exec_stats.get("paper_trades_by_strategy", {})
     for name, data in by_strat.items():
@@ -222,9 +222,9 @@ def _render_html(stats: dict[str, Any]) -> str:
 
   <div class="card">
     <h2>💰 P&L</h2>
-    <div class="metric"><span class="label">Paper Profit</span><span class="value {'positive' if paper_profit >= 0 else 'negative'}">${paper_profit:.4f}</span></div>
-    <div class="metric"><span class="label">Paper Cost</span><span class="value">${paper_cost:.2f}</span></div>
-    <div class="metric"><span class="label">Paper ROI</span><span class="value">{paper_roi:.2f}%</span></div>
+        <div class="metric"><span class="label">Expected Profit (Signals)</span><span class="value {'positive' if expected_profit >= 0 else 'negative'}">${expected_profit:.4f}</span></div>
+        <div class="metric"><span class="label">Expected Cost (Signals)</span><span class="value">${expected_cost:.2f}</span></div>
+        <div class="metric"><span class="label">Expected ROI (Signals)</span><span class="value">{expected_roi:.2f}%</span></div>
     <div class="metric"><span class="label">Realized P&L</span><span class="value {'positive' if realized >= 0 else 'negative'}">${realized:.4f}</span></div>
     <div class="metric"><span class="label">Unrealized P&L</span><span class="value">${unrealized:.4f}</span></div>
     <div class="metric"><span class="label">Total P&L</span><span class="value {'positive' if total_pnl >= 0 else 'negative'}">${total_pnl:.4f}</span></div>
@@ -250,13 +250,13 @@ def _render_html(stats: dict[str, Any]) -> str:
   <div class="card">
     <h2>🔌 Circuit Breaker</h2>
     <div class="metric"><span class="label">State</span><span class="cb-badge">{cb_state}</span></div>
-    <div class="metric"><span class="label">Daily Loss</span><span class="value">${cb_daily:.2f}</span></div>
+        <div class="metric"><span class="label">Daily P&L</span><span class="value">${cb_daily:.2f}</span></div>
     <div class="metric"><span class="label">Drawdown</span><span class="value">{cb_dd:.1f}%</span></div>
     <div class="metric"><span class="label">Consecutive Losses</span><span class="value">{cb_consec}</span></div>
   </div>
 
   <div class="card" style="grid-column: 1 / -1;">
-    <h2>📊 Strategy Breakdown</h2>
+        <h2>📊 Strategy Breakdown (Expected)</h2>
     <table>
       <tr><th>Strategy</th><th>Trades</th><th>Profit</th><th>ROI</th></tr>
       {strat_rows if strat_rows else '<tr><td colspan="4" style="text-align:center;color:#555;">No trades yet</td></tr>'}

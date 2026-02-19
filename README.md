@@ -1,154 +1,41 @@
 # Polymarket Trading Bot (Multi-Strategy)
 
-A **production-grade** Polymarket trading bot with **multiple proven strategies** for consistent profitability. Built for reliability, featuring robust error handling, precise order execution, and graceful recovery from network issues.
+## Agent Excerpt (Quick Understanding)
 
-## 🚀 What's New: Production-Ready Multi-Strategy System
+This repository runs a multi-strategy Polymarket trading system with a shared orchestrator, unified executor, and strict risk rails. It supports both live trading and an offline paper mode that mirrors fills into a paper wallet and tracks full trade lifecycle P&L (open, unrealized, resolved, redeemed).
 
 This bot features a sophisticated multi-strategy architecture inspired by successful traders who've made hundreds of thousands to millions in profit, now enhanced with production-grade reliability:
 
-### Available Strategies
+- Multiple strategy modules under one execution/risk framework
+- Paper + live modes with consistent position tracking
+- Resolution monitoring and redemption flow for Actual P&L
+- Circuit breaker, kill switch, inventory/risk limits, and requote controls
 
-1. **Arbitrage** 🔄 - YES+NO hedge arbitrage when sum < $1
-   - Trader "distinct-baguette": **$242k in 1.5 months**
-   - Lock guaranteed profit regardless of outcome
+## Core Features
 
-2. **Guaranteed Win Detection** 💎 - Buy resolved market winners below $1
-   - Example: Football games complete, winning shares at $0.45
-   - Critical urgency execution (these disappear fast!)
+- **Strategy Engine**: Arbitrage, guaranteed-win, statistical, market-making, and additional optional strategies
+- **Execution Layer**: Unified paper/live execution with order lifecycle tracking
+- **Paper Wallet**: Offline mirrored trading with realized/unrealized P&L and resolution-aware redemption
+- **Reliability**: Structured logging, retry/timeouts, graceful shutdown, and defensive parsing
+- **Safety Rails**: Kill switch, max exposure rules, position limits, and circuit breaker
 
-3. **Statistical Arbitrage** 📊 - Trade correlated market divergences
-   - Trader "sharky6999": **$480k** scanning ALL markets continuously
-   - Long cheap, short expensive, profit on convergence
-   - Bot now scans **all available Polymarket markets** (10,000+ limit)
-
-4. **Spread Farming** 💰 (Coming Soon) - High-frequency market making
-   - Trader "cry.eth2": **$194k** with 1M trades
-
-5. **AI Probability Models** 🤖 (Future) - ML-driven predictions
-   - Trader "ilovecircle": **$2.2M** in 2 months with 74% accuracy
-
-## ✨ Key Features
-
-- **Modular Strategy Framework**: Easy to add/remove strategies
-- **Priority-Based Execution**: Urgent opportunities first
-- **Comprehensive Market Scanner**: Scans **ALL** Polymarket markets (no 100-market limit)
-- **Bot-Inspired Patterns**: Strategies based on successful high-volume bots like @car, @rn1, @Account88888
-- **Production-Grade Reliability**:
-  - HTTP timeout configuration prevents indefinite hangs
-  - Cloudflare block detection and automatic cooldown
-  - Precise order quantization (avoids venue rejections)
-  - Structured error handling with actionable feedback
-  - WebSocket resilience (handles both list and dict message formats)
-- **Risk Management**: Position limits, kill switches, paper trading
-- **Comprehensive Testing**: 23 passing tests
-- **Production-Ready**: Logging, error handling, graceful shutdown
-
-## 📚 Documentation
-
-- **[STRATEGY_GUIDE.md](STRATEGY_GUIDE.md)** - Comprehensive guide to all strategies, architecture, and development
-- **[Original README](#original-bot)** - Basic setup and CLOB integration details below
-
-## Fast start (Multi-Strategy Bot)
-
-### 1. Install
+## Fast Start
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+python -m venv .venv
+.venv\Scripts\activate
 pip install -U pip
 pip install -e ".[dev]"
-```
-
-### 2. Configure
-
-```bash
-cp .env.example .env
-# Edit .env with your settings
-```
-
-### 3. Run
-
-```bash
-# Paper mode (safe, simulated trades)
-python -m polymarket_bot.app_multi
-
-# Live mode (set TRADING_MODE=live in .env first)
+copy .env.example .env
 python -m polymarket_bot.app_multi
 ```
 
-## 🎯 Strategy Configuration
+## Docs
 
-In `src/polymarket_bot/app_multi.py`:
-
-```python
-orch_config = OrchestratorConfig(
-   scan_interval=2.0,
-   max_concurrent_trades=settings.max_concurrent_trades,
-   enable_arbitrage=settings.enable_arbitrage,
-   enable_guaranteed_win=settings.enable_guaranteed_win,
-   enable_multi_outcome_arb=settings.enable_multi_outcome_arb,
-   enable_conditional_arb=settings.enable_conditional_arb,
-   enable_liquidity_rewards=settings.enable_liquidity_rewards,
-   enable_near_resolution=settings.enable_near_resolution,
-   enable_arb_stacking=settings.enable_arb_stacking,
-)
-```
-
-## 🛡️ Safety Features
-
-- **Kill Switch**: `KILL_SWITCH=1` stops all trading instantly
-- **Paper Mode**: Default mode - simulates real trading with actual position tracking
-  - Tracks actual positions with entry/exit prices
-  - Calculates real P&L (realized and unrealized)
-  - Monitors market resolutions and redeemable positions
-  - Full profitability analysis (see [PAPER_MODE_PROFITABILITY.md](PAPER_MODE_PROFITABILITY.md))
-- **Position Limits**: Max concurrent positions configurable
-- **Order Size Caps**: `MAX_ORDER_USDC=20` limits exposure
-- **Edge Buffers**: `MIN_EDGE_CENTS` ensures profit after fees
-
-## 🧪 Testing
-
-```bash
-# Run all tests
-pytest tests/ -v
-
-# All tests passing ✅
-# 23 passed in 0.03s
-```
-
-## 📊 Performance Tracking
-
-The bot logs real-time statistics:
-
-```
-⏱️  UPTIME: 15.2 minutes
-📊 SIGNALS: seen=47 executed=3
-📈 EXECUTIONS: total=3 success=3 failed=0
-💼 ACTIVE POSITIONS: 2
-🎯 STRATEGIES: 2 enabled
-```
-
-## 🏗️ Architecture
-
-```
-src/polymarket_bot/
-├── app_multi.py              # Multi-strategy application ⭐
-├── orchestrator.py           # Strategy coordination ⭐
-├── scanner.py                # Market discovery ⭐
-├── strategy.py               # Framework base classes ⭐
-├── unified_executor.py       # Trade execution ⭐
-├── strategies/               # Strategy implementations ⭐
-│   ├── arbitrage_strategy.py
-│   ├── guaranteed_win_strategy.py
-│   └── statistical_arbitrage_strategy.py
-├── app.py                    # Original simple arbitrage
-├── clob_client.py           # CLOB API client
-├── wss.py                   # WebSocket feeds
-├── config.py                # Configuration
-└── executor.py              # Legacy executor
-```
-
-⭐ = New multi-strategy components
+- [STRATEGY_GUIDE.md](STRATEGY_GUIDE.md)
+- [PAPER_TRADING_GUIDE.md](PAPER_TRADING_GUIDE.md)
+- [PAPER_MODE_PROFITABILITY.md](PAPER_MODE_PROFITABILITY.md)
+- [Original README](#original-bot)
 
 ---
 

@@ -78,6 +78,7 @@ class MarketScanner:
         self.api_base = api_base
         self.fetch_limit = fetch_limit if fetch_limit is not None else DEFAULT_FETCH_LIMIT
         self._markets_cache: dict[str, MarketInfo] = {}
+        self._markets_cache_by_token: dict[str, MarketInfo] = {}
         self._last_refresh = 0.0
         self._refresh_interval = 60.0  # Cache for 60 seconds
 
@@ -116,8 +117,12 @@ class MarketScanner:
                 fetch_limit = DEFAULT_FETCH_LIMIT
             
             # Gamma API endpoint for markets
-            params: dict = {"limit": fetch_limit, "active": active_only}
+            # - active_only=True  => explicit active open markets only
+            # - active_only=False => full universe (do not force active=False,
+            #   which would return only inactive markets)
+            params: dict = {"limit": fetch_limit}
             if active_only:
+                params["active"] = True
                 params["closed"] = False  # Exclude resolved / settled markets
             response = self._get("/markets", params=params)
             
@@ -150,12 +155,59 @@ class MarketScanner:
 
     def get_market(self, condition_id: str) -> MarketInfo | None:
         """Fetch a specific market by condition ID."""
+        # Gamma /markets/{id} often rejects 0x-style condition ids; skip straight
+        # to cache/list fallback for those to avoid expensive retry noise.
+        if not str(condition_id).startswith("0x"):
+            try:
+                response = self._get(f"/markets/{condition_id}")
+                return self._parse_market(response)
+            except Exception as e:
+                log.debug(f"Primary market lookup failed for {condition_id}: {e}")
+
+        # Fallback path: Gamma /markets/{id} may reject condition_id-style hashes
+        # with 422. In that case, resolve by scanning market lists and matching
+        # the `conditionId` field directly.
         try:
-            response = self._get(f"/markets/{condition_id}")
-            return self._parse_market(response)
+            cached = self.get_cached_market(condition_id)
+            if cached is not None:
+                return cached
+
+            # Force refresh including closed/resolved markets for lifecycle checks.
+            self.refresh_cache(force=True)
+            cached = self._markets_cache.get(condition_id)
+            if cached is not None:
+                return cached
+
+            # Final fallback: explicit fetch and linear match (case-insensitive).
+            needle = str(condition_id).lower()
+            for market in self.get_all_markets(limit=None, active_only=False):
+                if str(market.condition_id).lower() == needle:
+                    return market
         except Exception as e:
-            log.error(f"Failed to fetch market {condition_id}: {e}")
-            return None
+            log.debug("Condition-id fallback lookup failed for %s: %s", condition_id, e)
+
+        log.error("Failed to fetch market %s via both id and condition-id lookup", condition_id)
+        return None
+
+    def get_market_by_token(self, token_id: str) -> MarketInfo | None:
+        """Fetch market containing a specific CLOB token_id."""
+        # Direct Gamma lookup by token id is the most reliable path for negRisk
+        # bracket tokens used by arb strategies.
+        try:
+            response = self._get("/markets", params={"limit": 1, "clob_token_ids": str(token_id)})
+            if isinstance(response, list) and response:
+                return self._parse_market(response[0])
+        except Exception as e:
+            log.debug("Token-id lookup failed for %s: %s", token_id, e)
+
+        self.refresh_cache()
+        market = self._markets_cache_by_token.get(str(token_id))
+        if market is not None:
+            return market
+
+        # Force refresh including closed/resolved markets and retry.
+        self.refresh_cache(force=True)
+        return self._markets_cache_by_token.get(str(token_id))
 
     def get_high_volume_markets(
         self,
@@ -256,6 +308,7 @@ class MarketScanner:
 
         # Parse token data from the three parallel JSON arrays
         tokens: list[TokenInfo] = []
+        winner_outcome_from_tokens: str | None = None
         try:
             outcomes_raw = data.get("outcomes") or "[]"
             prices_raw = data.get("outcomePrices") or "[]"
@@ -274,6 +327,8 @@ class MarketScanner:
                     vol = tex.get("volume", 0)
                     if tid:
                         volume_by_id[tid] = Decimal(str(vol))
+                    if bool(tex.get("winner", False)) and winner_outcome_from_tokens is None:
+                        winner_outcome_from_tokens = str(tex.get("outcome") or "").upper() or None
 
             for i, outcome in enumerate(outcomes):
                 token_id = str(token_ids[i]) if i < len(token_ids) else ""
@@ -302,6 +357,16 @@ class MarketScanner:
             v = data.get(key)
             return Decimal(str(v)) if v is not None else None
 
+        # Gamma has used multiple field names across payload variants.
+        winning_outcome = (
+            data.get("winning_outcome")
+            or data.get("winningOutcome")
+            or data.get("winner")
+            or winner_outcome_from_tokens
+        )
+        if winning_outcome is not None:
+            winning_outcome = str(winning_outcome).upper()
+
         return MarketInfo(
             condition_id=str(data.get("conditionId") or data.get("condition_id") or ""),
             question=str(data.get("question", "")),
@@ -312,7 +377,7 @@ class MarketScanner:
             active=bool(data.get("active", True)),
             closed=bool(data.get("closed", False)),
             resolved=bool(data.get("resolved", False)),
-            winning_outcome=data.get("winning_outcome"),
+            winning_outcome=winning_outcome,
             neg_risk_market_id=data.get("negRiskMarketID") or data.get("neg_risk_market_id"),
             group_item_title=data.get("groupItemTitle") or data.get("group_item_title"),
             rewards_min_size=_dec_or_none("rewardsMinSize"),
@@ -328,8 +393,17 @@ class MarketScanner:
         """Refresh the market cache."""
         now = time.time()
         if force or (now - self._last_refresh) > self._refresh_interval:
-            markets = self.get_all_markets(limit=None)  # Fetch all markets for cache
+            # Include closed/resolved markets so resolution monitoring can find
+            # recently settled conditions by condition_id.
+            markets = self.get_all_markets(limit=None, active_only=False)
             self._markets_cache = {m.condition_id: m for m in markets}
+            token_map: dict[str, MarketInfo] = {}
+            for market in markets:
+                for token in market.tokens:
+                    tid = str(token.token_id)
+                    if tid:
+                        token_map[tid] = market
+            self._markets_cache_by_token = token_map
             self._last_refresh = now
             log.info(f"Market cache refreshed with {len(self._markets_cache)} markets")
 
