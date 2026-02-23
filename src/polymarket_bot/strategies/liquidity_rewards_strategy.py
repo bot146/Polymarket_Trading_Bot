@@ -69,6 +69,10 @@ class LiquidityRewardsStrategy(Strategy):
         markets = market_data.get("markets", [])
         now = time.time()
 
+        # Prune expired cooldown entries to prevent memory leaks
+        cutoff = now - self._cooldown_seconds * 2
+        self._signal_cooldown = {k: v for k, v in self._signal_cooldown.items() if v > cutoff}
+
         for m in markets:
             condition_id = m.get("condition_id", "")
             if not condition_id:

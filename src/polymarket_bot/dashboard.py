@@ -23,6 +23,7 @@ import threading
 import time
 from decimal import Decimal
 from functools import partial
+from html import escape as _esc
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Any
 
@@ -168,7 +169,7 @@ def _render_html(stats: dict[str, Any]) -> str:
     for name, data in by_strat.items():
         strat_rows += f"""
         <tr>
-            <td>{name}</td>
+            <td>{_esc(str(name))}</td>
             <td>{data.get('count', 0)}</td>
             <td>${data.get('total_profit', 0):.4f}</td>
             <td>{data.get('roi', 0):.2f}%</td>
@@ -232,7 +233,7 @@ def _render_html(stats: dict[str, Any]) -> str:
 
     <div class="card">
         <h2>💼 Wallet</h2>
-        <div class="metric"><span class="label">Mode</span><span class="value">{wallet_mode}</span></div>
+        <div class="metric"><span class="label">Mode</span><span class="value">{_esc(wallet_mode)}</span></div>
         <div class="metric"><span class="label">Bankroll Cap</span><span class="value">{wallet_equity_str}</span></div>
         <div class="metric"><span class="label">Sizing Equity</span><span class="value">{wallet_sizing_str}</span></div>
         <div class="metric"><span class="label">Base Balance</span><span class="value">{wallet_start_str}</span></div>
@@ -249,7 +250,7 @@ def _render_html(stats: dict[str, Any]) -> str:
 
   <div class="card">
     <h2>🔌 Circuit Breaker</h2>
-    <div class="metric"><span class="label">State</span><span class="cb-badge">{cb_state}</span></div>
+    <div class="metric"><span class="label">State</span><span class="cb-badge">{_esc(cb_state)}</span></div>
         <div class="metric"><span class="label">Daily P&L</span><span class="value">${cb_daily:.2f}</span></div>
     <div class="metric"><span class="label">Drawdown</span><span class="value">{cb_dd:.1f}%</span></div>
     <div class="metric"><span class="label">Consecutive Losses</span><span class="value">{cb_consec}</span></div>

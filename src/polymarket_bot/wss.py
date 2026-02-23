@@ -44,6 +44,7 @@ class MarketWssClient:
 
         self._ws: WebSocketApp | None = None
         self._stop = threading.Event()
+        self._lock = threading.Lock()
 
         # best bid/ask in *price* terms (0..1)
         self.best_bid: dict[str, float] = {}
@@ -126,7 +127,8 @@ class MarketWssClient:
                     price = top.get("price")
                 if price is not None:
                     try:
-                        self.best_bid[str(asset_id)] = float(price)
+                        with self._lock:
+                            self.best_bid[str(asset_id)] = float(price)
                     except (ValueError, TypeError):
                         pass
 
@@ -139,9 +141,15 @@ class MarketWssClient:
                     price = top.get("price")
                 if price is not None:
                     try:
-                        self.best_ask[str(asset_id)] = float(price)
+                        with self._lock:
+                            self.best_ask[str(asset_id)] = float(price)
                     except (ValueError, TypeError):
                         pass
+
+    def get_best_prices(self) -> tuple[dict[str, float], dict[str, float]]:
+        """Return thread-safe snapshot of (best_bid, best_ask) dicts."""
+        with self._lock:
+            return dict(self.best_bid), dict(self.best_ask)
 
     def _on_error(self, ws: WebSocketApp, error: Exception) -> None:
         log.warning("WSS error: %s", error)

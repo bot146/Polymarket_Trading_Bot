@@ -184,8 +184,8 @@ def test_guaranteed_win_position_sizing():
     assert len(signals) == 1
     
     signal = signals[0]
-    # With $100 max and price at $0.80, we should buy 100 / 0.80 = 125 shares
-    expected_size = Decimal("100") / Decimal("0.80")
-    expected_size = expected_size.quantize(Decimal("0.01"))
-    
+    # With $100 max and price at $0.80, fee-inclusive cost = 0.80 * 1.02 = 0.816
+    # We should buy 100 / 0.816 = ~122.55 shares
+    cost_per_share = Decimal("0.80") * (Decimal("1") + Decimal("0.02"))
+    expected_size = (Decimal("100") / cost_per_share).quantize(Decimal("0.01"))
     assert signal.trades[0].size == expected_size

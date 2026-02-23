@@ -85,6 +85,11 @@ class MultiOutcomeArbStrategy(Strategy):
 
         # 2. Evaluate each group
         now = time.time()
+
+        # Prune expired cooldown entries to prevent memory leaks
+        cutoff = now - self._cooldown_seconds * 2
+        self._signal_cooldown = {k: v for k, v in self._signal_cooldown.items() if v > cutoff}
+
         for group_id, brackets in groups.items():
             if len(brackets) < MIN_BRACKETS:
                 continue
@@ -155,8 +160,9 @@ class MultiOutcomeArbStrategy(Strategy):
                 continue
 
             # 5. Calculate size — each bracket gets the same number of shares
-            # Total cost = sum_ask * size, so max_size = max_order / sum_ask
-            size = (self.max_order_usdc / sum_ask).quantize(Decimal("0.01"))
+            # Total cost including fees = sum_ask * (1 + fee) * size
+            cost_per_unit = sum_ask * (Decimal("1") + self.taker_fee_rate)
+            size = (self.max_order_usdc / cost_per_unit).quantize(Decimal("0.01"))
             if size <= 0:
                 continue
 

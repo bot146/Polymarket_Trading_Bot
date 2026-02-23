@@ -9,7 +9,7 @@ from polymarket_bot.arbitrage import compute_hedge_opportunity
 from polymarket_bot.clob_client import build_clob_client
 from polymarket_bot.config import load_settings
 from polymarket_bot.executor import execute_hedge
-from polymarket_bot.logging import setup_logging
+from polymarket_bot.log_config import setup_logging
 from polymarket_bot.wss import MarketWssClient
 
 log = logging.getLogger(__name__)

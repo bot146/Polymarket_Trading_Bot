@@ -67,8 +67,7 @@ class EnhancedMarketFeed:
         with self._lock:
             # Snapshot the dicts atomically (dict.copy is fast).
             try:
-                raw_bid = dict(self.wss.best_bid)
-                raw_ask = dict(self.wss.best_ask)
+                raw_bid, raw_ask = self.wss.get_best_prices()
             except Exception:
                 raw_bid = {}
                 raw_ask = {}

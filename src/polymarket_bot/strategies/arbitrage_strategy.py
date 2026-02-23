@@ -183,21 +183,23 @@ class ArbitrageStrategy(Strategy):
         if signal.trades[0].size != signal.trades[1].size:
             return False, "size_mismatch"
 
-        # Verify edge is still positive
+        # Verify edge is still positive (including fees)
         total_cost = signal.trades[0].price + signal.trades[1].price
-        if total_cost >= Decimal("1"):
+        total_with_fees = total_cost * (Decimal("1") + self.taker_fee_rate)
+        if total_with_fees >= Decimal("1"):
             return False, "edge_disappeared"
 
         return True, "ok"
 
     def _calculate_size(self, yes_ask: Decimal, no_ask: Decimal) -> Decimal:
-        """Calculate position size based on max order size."""
-        # We need to buy both, so total cost is (yes_ask + no_ask) * size
+        """Calculate position size based on max order size (including fees)."""
+        # We need to buy both, so total cost is (yes_ask + no_ask) * (1 + fee) * size
         # Limit total cost to max_order_usdc
         total_ask = yes_ask + no_ask
         if total_ask <= 0:
             return Decimal("0")
         
-        max_size = self.max_order_usdc / total_ask
+        cost_per_pair = total_ask * (Decimal("1") + self.taker_fee_rate)
+        max_size = self.max_order_usdc / cost_per_pair
         # Round down to 2 decimal places
         return max_size.quantize(Decimal("0.01"))

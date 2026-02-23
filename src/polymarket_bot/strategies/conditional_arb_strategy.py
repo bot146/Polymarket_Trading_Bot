@@ -82,6 +82,10 @@ class ConditionalArbStrategy(Strategy):
 
         now = time.time()
 
+        # Prune expired cooldown entries to prevent memory leaks
+        cutoff = now - self._cooldown_seconds * 2
+        self._signal_cooldown = {k: v for k, v in self._signal_cooldown.items() if v > cutoff}
+
         for group_id, brackets in groups.items():
             if len(brackets) < MIN_BRACKETS:
                 continue

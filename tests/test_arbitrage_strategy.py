@@ -161,9 +161,11 @@ def test_arbitrage_strategy_calculates_size_correctly():
     
     signal = signals[0]
     # Total cost is 0.30 + 0.40 = 0.70 per share pair
-    # With $100 max, we should buy: 100 / 0.70 = 142.85, rounded down to 142.85
-    expected_size = Decimal("100") / Decimal("0.70")
-    expected_size = expected_size.quantize(Decimal("0.01"))
+    # With 2% taker fee, cost per pair = 0.70 * 1.02 = 0.714
+    # With $100 max, we should buy: 100 / 0.714 = ~140.06
+    total_ask = Decimal("0.70")
+    cost_per_pair = total_ask * (Decimal("1") + Decimal("0.02"))
+    expected_size = (Decimal("100") / cost_per_pair).quantize(Decimal("0.01"))
     
     assert signal.trades[0].size == expected_size
     assert signal.trades[1].size == expected_size

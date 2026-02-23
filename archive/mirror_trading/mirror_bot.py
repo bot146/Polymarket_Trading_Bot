@@ -9,7 +9,7 @@ import sys
 from typing import Dict, Any
 
 from polymarket_bot.config import load_settings, Settings
-from polymarket_bot.logging import setup_logging
+from polymarket_bot.log_config import setup_logging
 from polymarket_bot.polymarket_client import PolymarketClient
 
 log = logging.getLogger(__name__)

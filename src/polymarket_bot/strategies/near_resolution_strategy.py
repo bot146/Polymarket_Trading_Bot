@@ -73,6 +73,10 @@ class NearResolutionStrategy(Strategy):
         now_utc = datetime.now(timezone.utc)
         now_ts = time.time()
 
+        # Prune expired cooldown entries to prevent memory leaks
+        cutoff = now_ts - self._cooldown_seconds * 2
+        self._signal_cooldown = {k: v for k, v in self._signal_cooldown.items() if v > cutoff}
+
         for m in markets:
             condition_id = m.get("condition_id", "")
             if not condition_id:
@@ -111,8 +115,9 @@ class NearResolutionStrategy(Strategy):
             if edge_cents < self.min_edge_cents:
                 continue
 
-            # Size — how many shares can we buy?
-            size = (self.max_order_usdc / best_ask).quantize(Decimal("0.01"))
+            # Size — how many shares can we buy (including fees)?
+            cost_per_share = best_ask * (Decimal("1") + self.taker_fee_rate)
+            size = (self.max_order_usdc / cost_per_share).quantize(Decimal("0.01"))
             if size <= 0:
                 continue
 
@@ -194,7 +199,7 @@ class NearResolutionStrategy(Strategy):
         for t in tokens:
             if t.get("outcome", "").upper() not in ("YES", ""):
                 # Only consider YES tokens (or unlabelled ones)
-                pass  # fall through — also check unlabelled
+                continue
 
             best_ask = t.get("best_ask")
             if best_ask is None or best_ask <= 0:

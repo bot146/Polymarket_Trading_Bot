@@ -171,7 +171,7 @@ class GuaranteedWinStrategy(Strategy):
         return True, "ok"
 
     def _calculate_size(self, ask_price: Decimal) -> Decimal:
-        """Calculate position size based on max order size.
+        """Calculate position size based on max order size (including fees).
         
         For guaranteed wins, we're willing to deploy more capital
         since the risk is minimal.
@@ -179,6 +179,7 @@ class GuaranteedWinStrategy(Strategy):
         if ask_price <= 0:
             return Decimal("0")
         
-        max_size = self.max_order_usdc / ask_price
+        cost_per_share = ask_price * (Decimal("1") + self.taker_fee_rate)
+        max_size = self.max_order_usdc / cost_per_share
         # Round down to 2 decimal places
         return max_size.quantize(Decimal("0.01"))
