@@ -69,6 +69,15 @@ class Settings:
     market_fetch_limit: int = 10000  # Max markets to fetch from API (0 = use DEFAULT_FETCH_LIMIT)
     min_market_volume: Decimal = Decimal("1000")  # Minimum volume threshold in USDC
 
+    # Resolution time window (filter markets by expected end date)
+    resolution_min_days: float = 0.0   # Min days to resolution (0 = no minimum)
+    resolution_max_days: float = 30.0  # Max days to resolution (0 = no maximum)
+
+    # Resolution priority scoring weights
+    resolution_priority_weight: float = 0.5   # Weight for time-to-resolution in priority score (0-1)
+    edge_priority_weight: float = 0.5          # Weight for edge/profit in priority score (0-1)
+    resolution_sweet_spot_hours: float = 24.0  # Markets resolving within this many hours get max time score
+
     # Fee modeling
     taker_fee_rate: Decimal = Decimal("0.02")    # 2% taker fee
     maker_fee_rate: Decimal = Decimal("0.005")   # 0.5% maker fee (rebate on some venues)
@@ -202,6 +211,12 @@ def load_settings(env_file: str | None = None) -> Settings:
         
         market_fetch_limit=int(os.getenv("MARKET_FETCH_LIMIT", "10000")),
         min_market_volume=Decimal(os.getenv("MIN_MARKET_VOLUME", "1000")),
+
+        resolution_min_days=float(os.getenv("RESOLUTION_MIN_DAYS", "0")),
+        resolution_max_days=float(os.getenv("RESOLUTION_MAX_DAYS", "30")),
+        resolution_priority_weight=float(os.getenv("RESOLUTION_PRIORITY_WEIGHT", "0.5")),
+        edge_priority_weight=float(os.getenv("EDGE_PRIORITY_WEIGHT", "0.5")),
+        resolution_sweet_spot_hours=float(os.getenv("RESOLUTION_SWEET_SPOT_HOURS", "24")),
 
         # Fee modeling
         taker_fee_rate=Decimal(os.getenv("TAKER_FEE_RATE", "0.02")),

@@ -40,6 +40,9 @@ class _FakeScanner:
     def get_resolved_markets(self, limit=None):
         return []
 
+    def filter_by_resolution_window(self, markets, min_days=0, max_days=0):
+        return markets
+
 
 class _FakeFeed:
     def __init__(self, best_bid: dict[str, float], best_ask: dict[str, float]):
@@ -70,6 +73,12 @@ class _Settings:
     enable_copy_trading = False
     whale_min_trade_usdc = Decimal("500")
     whale_addresses = ""
+    # resolution time window
+    resolution_min_days = 0.0
+    resolution_max_days = 0.0    # 0 = no filtering in tests
+    resolution_priority_weight = 0.5
+    edge_priority_weight = 0.5
+    resolution_sweet_spot_hours = 24.0
 
 
 def test_orchestrator_prefers_wss_best_ask_over_gamma_price(monkeypatch):

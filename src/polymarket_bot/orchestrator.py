@@ -219,8 +219,31 @@ class StrategyOrchestrator:
         """Scan markets and collect signals from all strategies."""
         market_data = self._gather_market_data()
         
+        # Build a condition_id → end_date lookup from market data so we can
+        # inject resolution info into every signal's metadata centrally,
+        # regardless of whether individual strategies include it.
+        end_date_by_condition: dict[str, str | None] = {}
+        for m in market_data.get("markets", []):
+            cid = m.get("condition_id")
+            if cid:
+                end_date_by_condition[cid] = m.get("end_date")
+
         # Run all strategies
         signals = self.registry.scan_all(market_data)
+
+        # Enrich signals: ensure end_date is in metadata for priority scoring
+        enriched: list[StrategySignal] = []
+        for sig in signals:
+            meta = sig.opportunity.metadata
+            cid = meta.get("condition_id", "")
+            if "end_date" not in meta and cid in end_date_by_condition:
+                new_meta = dict(meta)
+                new_meta["end_date"] = end_date_by_condition[cid]
+                new_opp = replace(sig.opportunity, metadata=new_meta)
+                sig = replace(sig, opportunity=new_opp)
+            enriched.append(sig)
+
+        signals = enriched
         self.total_signals_seen += len(signals)
         
         if signals:
@@ -229,14 +252,86 @@ class StrategyOrchestrator:
         return signals
 
     def prioritize_signals(self, signals: list[StrategySignal]) -> list[StrategySignal]:
-        """Prioritize signals by urgency and expected profit."""
-        # Sort by urgency (descending), then expected profit (descending)
-        sorted_signals = sorted(
-            signals,
-            key=lambda s: (s.opportunity.urgency, s.opportunity.expected_profit),
-            reverse=True
-        )
-        return sorted_signals
+        """Prioritize signals by resolution time, edge, and urgency.
+
+        Each signal receives a composite priority score:
+            score = edge_weight * edge_score + resolution_weight * time_score
+
+        Where:
+        - **edge_score** is normalized expected profit (0-1 within the batch)
+        - **time_score** rewards markets closer to resolution:
+            • Markets within ``resolution_sweet_spot_hours`` get score 1.0
+            • Score decays linearly toward 0 at ``resolution_max_days``
+            • Markets with unknown end_date get score 0.1 (low but nonzero)
+
+        Urgency is used as a tiebreaker (higher urgency wins).
+        """
+        if not signals:
+            return signals
+
+        sweet_spot_hours = self.settings.resolution_sweet_spot_hours
+        max_hours = self.settings.resolution_max_days * 24.0
+        edge_weight = self.settings.edge_priority_weight
+        time_weight = self.settings.resolution_priority_weight
+
+        # Normalize weights so they sum to 1.0
+        total_weight = edge_weight + time_weight
+        if total_weight > 0:
+            edge_weight /= total_weight
+            time_weight /= total_weight
+        else:
+            edge_weight = 0.5
+            time_weight = 0.5
+
+        # Compute edge scores (normalize to [0, 1])
+        profits = [float(s.opportunity.expected_profit) for s in signals]
+        max_profit = max(profits) if profits else 1.0
+        if max_profit <= 0:
+            max_profit = 1.0
+
+        def _time_score(signal: StrategySignal) -> float:
+            """Score from 0.0 to 1.0 based on time to resolution."""
+            end_date = signal.opportunity.metadata.get("end_date")
+            hours = MarketScanner.hours_to_resolution(end_date)
+            if hours is None:
+                return 0.1  # Unknown resolution → low priority
+
+            if hours <= sweet_spot_hours:
+                return 1.0  # Sweet spot → max priority
+            if max_hours > 0 and hours >= max_hours:
+                return 0.0  # Beyond window
+
+            # Linear decay from 1.0 at sweet_spot to 0.0 at max_hours
+            remaining_range = max_hours - sweet_spot_hours
+            if remaining_range <= 0:
+                return 0.5
+            return max(0.0, 1.0 - (hours - sweet_spot_hours) / remaining_range)
+
+        def _composite_score(signal: StrategySignal, idx: int) -> float:
+            edge_score = profits[idx] / max_profit
+            t_score = _time_score(signal)
+            return edge_weight * edge_score + time_weight * t_score
+
+        scored = [
+            (_composite_score(s, i), s.opportunity.urgency, s)
+            for i, s in enumerate(signals)
+        ]
+        scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+
+        # Log the top 5 for visibility
+        for rank, (score, urgency, sig) in enumerate(scored[:5], 1):
+            end_date = sig.opportunity.metadata.get("end_date", "?")
+            hours = MarketScanner.hours_to_resolution(end_date)
+            hours_str = f"{hours:.0f}h" if hours is not None else "?"
+            log.debug(
+                "Priority #%d: score=%.3f edge=$%.4f time=%s urgency=%d | %s",
+                rank, score,
+                float(sig.opportunity.expected_profit),
+                hours_str, urgency,
+                sig.opportunity.metadata.get("condition_id", "?")[:16],
+            )
+
+        return [s for _, _, s in scored]
 
     def filter_signals(self, signals: list[StrategySignal]) -> list[StrategySignal]:
         """Filter signals based on current state and constraints."""
@@ -313,6 +408,23 @@ class StrategyOrchestrator:
                     min_volume=self.settings.min_market_volume,  # Use settings
                     limit=None  # Scan all markets above volume threshold
                 )
+
+                # Apply resolution-time window filter
+                if self.settings.resolution_max_days > 0 or self.settings.resolution_min_days > 0:
+                    pre_filter_count = len(high_vol_markets)
+                    high_vol_markets = self.scanner.filter_by_resolution_window(
+                        high_vol_markets,
+                        min_days=self.settings.resolution_min_days,
+                        max_days=self.settings.resolution_max_days,
+                    )
+                    if pre_filter_count != len(high_vol_markets):
+                        log.info(
+                            "🕐 Resolution window [%.0f-%.0f days]: %d → %d markets",
+                            self.settings.resolution_min_days,
+                            self.settings.resolution_max_days,
+                            pre_filter_count,
+                            len(high_vol_markets),
+                        )
 
                 # Gather token ids and start feed (once).
                 token_ids: list[str] = []

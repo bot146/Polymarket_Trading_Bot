@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -411,3 +412,102 @@ class MarketScanner:
         """Get a market from cache (refresh if stale)."""
         self.refresh_cache()
         return self._markets_cache.get(condition_id)
+
+    # ------------------------------------------------------------------
+    # Resolution-time helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def parse_end_date(end_date: str | None) -> datetime | None:
+        """Parse a market's end_date string into a timezone-aware datetime.
+
+        Handles ISO-8601 date or datetime strings from Gamma API (e.g.
+        ``"2025-12-31"``, ``"2025-12-31T23:59:59Z"``).
+
+        Returns ``None`` if the value is missing or unparseable.
+        """
+        if not end_date:
+            return None
+        try:
+            # Try full ISO datetime first
+            dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except ValueError:
+            pass
+        try:
+            # Date-only string → assume end-of-day UTC
+            dt = datetime.strptime(end_date, "%Y-%m-%d").replace(
+                hour=23, minute=59, second=59, tzinfo=timezone.utc
+            )
+            return dt
+        except ValueError:
+            return None
+
+    @staticmethod
+    def hours_to_resolution(end_date: str | None) -> float | None:
+        """Return hours until market resolution, or None if unknown."""
+        dt = MarketScanner.parse_end_date(end_date)
+        if dt is None:
+            return None
+        now = datetime.now(timezone.utc)
+        delta = (dt - now).total_seconds() / 3600.0
+        return max(delta, 0.0)
+
+    def filter_by_resolution_window(
+        self,
+        markets: list[MarketInfo],
+        min_days: float = 0.0,
+        max_days: float = 30.0,
+    ) -> list[MarketInfo]:
+        """Filter markets to those resolving within a time window.
+
+        Args:
+            markets: List of markets to filter.
+            min_days: Minimum days to resolution (0 = no minimum).
+            max_days: Maximum days to resolution (0 = no maximum / unlimited).
+
+        Returns:
+            Markets whose end_date falls within [now + min_days, now + max_days].
+            Markets without a parseable end_date are **excluded** when max_days > 0.
+        """
+        if min_days <= 0 and max_days <= 0:
+            return markets  # No filtering requested
+
+        min_hours = min_days * 24.0
+        max_hours = max_days * 24.0
+
+        filtered: list[MarketInfo] = []
+        excluded_no_date = 0
+        excluded_outside = 0
+
+        for market in markets:
+            hours = self.hours_to_resolution(market.end_date)
+            if hours is None:
+                if max_days > 0:
+                    excluded_no_date += 1
+                    continue
+                else:
+                    # No max → include markets without dates
+                    filtered.append(market)
+                    continue
+
+            if min_hours > 0 and hours < min_hours:
+                excluded_outside += 1
+                continue
+            if max_hours > 0 and hours > max_hours:
+                excluded_outside += 1
+                continue
+
+            filtered.append(market)
+
+        if excluded_no_date or excluded_outside:
+            log.debug(
+                "Resolution window filter: %d → %d markets "
+                "(excluded: %d no date, %d outside window [%.0f-%.0f days])",
+                len(markets), len(filtered),
+                excluded_no_date, excluded_outside, min_days, max_days,
+            )
+
+        return filtered
