@@ -349,7 +349,15 @@ class BotRunner:
         self.position_manager = PositionManager(storage_path=str(storage_path))
 
         if settings.trading_mode == "paper" and settings.paper_reset_on_start:
+            log.info("🧹 Paper-mode clean start: resetting positions & wallet …")
             self.position_manager.reset_all_positions()
+            # Remove stale backup files so they can never be confused with live state.
+            bot_dir = storage_path.parent
+            for bak in bot_dir.glob("positions_bak_*"):
+                try:
+                    bak.unlink()
+                except OSError:
+                    pass
         log.info("✅ Position manager initialized (%d positions loaded)", len(self.position_manager.positions))
 
         # ── CLOB client ───────────────────────────────────────────────
@@ -419,6 +427,12 @@ class BotRunner:
             )
             if settings.trading_mode == "paper" and settings.paper_reset_on_start:
                 wallet_path.parent.mkdir(parents=True, exist_ok=True)
+                # Delete first to avoid stale data on failed write.
+                if wallet_path.exists():
+                    try:
+                        wallet_path.unlink()
+                    except OSError:
+                        pass
                 wallet_path.write_text(
                     '{\n'
                     f'  "starting_balance": "{settings.paper_start_balance}",\n'
@@ -432,6 +446,7 @@ class BotRunner:
                     '}',
                     encoding="utf-8",
                 )
+                log.info("🧹 Paper wallet reset to $%s", settings.paper_start_balance)
             self.paper_wallet.ensure_file()
             log.info("💼 Paper wallet config: %s", wallet_path)
 

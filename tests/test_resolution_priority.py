@@ -52,10 +52,11 @@ class TestHoursToResolution:
         assert hours is not None
         assert 47 < hours < 49
 
-    def test_past_date_clamps_to_zero(self):
+    def test_past_date_returns_negative(self):
         past = (datetime.now(timezone.utc) - timedelta(hours=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
         hours = MarketScanner.hours_to_resolution(past)
-        assert hours == 0.0
+        assert hours is not None
+        assert hours < 0  # Past-due markets return negative hours
 
     def test_none_returns_none(self):
         assert MarketScanner.hours_to_resolution(None) is None
@@ -174,6 +175,8 @@ class _MinSettings:
     resolution_priority_weight = 0.5
     edge_priority_weight = 0.5
     resolution_sweet_spot_hours = 24.0
+    trading_mode = "paper"
+    paper_resolution_max_hours = 0.0
 
 
 class TestPrioritizeSignals:

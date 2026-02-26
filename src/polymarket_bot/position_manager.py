@@ -287,7 +287,7 @@ class PositionManager:
         non_arb: list[Position] = []
 
         for position in open_positions:
-            if position.strategy == "multi_outcome_arb":
+            if position.strategy in ("multi_outcome_arb", "conditional_arb"):
                 arb_groups.setdefault(position.condition_id, []).append(position)
             else:
                 non_arb.append(position)
@@ -396,9 +396,39 @@ class PositionManager:
     def reset_all_positions(self) -> None:
         """Clear all positions and persist an empty portfolio.
 
-        Intended for paper-mode clean restarts.
+        Intended for paper-mode clean restarts.  The old file is deleted
+        first so that a failed write can never leave stale data behind.
         """
+        stale_count = len(self.positions)
         self.positions = {}
         self._next_position_id = 1
+
+        # Delete the old file *before* writing, so a crash can never leave
+        # stale positions that get reloaded on the next start.
+        if self.storage_path and self.storage_path.exists():
+            try:
+                self.storage_path.unlink()
+            except OSError as exc:
+                log.error("Failed to delete stale positions file: %s", exc)
+
         self._save_positions()
-        log.info("Reset all positions (paper clean start)")
+
+        # Belt-and-suspenders: verify the file is clean.
+        if self.storage_path and self.storage_path.exists():
+            try:
+                import json as _json
+                with open(self.storage_path, "r") as _f:
+                    data = _json.load(_f)
+                persisted = len(data.get("positions", []))
+                if persisted != 0:
+                    log.error(
+                        "Position reset verification FAILED – file still has %d positions!",
+                        persisted,
+                    )
+            except Exception:
+                pass  # verification is best-effort
+
+        log.info(
+            "🧹 Paper clean start: cleared %d stale position(s), file reset",
+            stale_count,
+        )

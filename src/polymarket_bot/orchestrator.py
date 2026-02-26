@@ -295,6 +295,8 @@ class StrategyOrchestrator:
             hours = MarketScanner.hours_to_resolution(end_date)
             if hours is None:
                 return 0.1  # Unknown resolution → low priority
+            if hours < 0:
+                return 0.0  # Already past due
 
             if hours <= sweet_spot_hours:
                 return 1.0  # Sweet spot → max priority
@@ -409,19 +411,30 @@ class StrategyOrchestrator:
                     limit=None  # Scan all markets above volume threshold
                 )
 
-                # Apply resolution-time window filter
-                if self.settings.resolution_max_days > 0 or self.settings.resolution_min_days > 0:
+                # Apply resolution-time window filter.
+                # In paper mode, use the tighter paper-specific window (hours → days)
+                # so markets resolve quickly and we capture actual P&L.
+                res_min = self.settings.resolution_min_days
+                res_max = self.settings.resolution_max_days
+                if (
+                    self.settings.trading_mode == "paper"
+                    and getattr(self.settings, "paper_resolution_max_hours", 0) > 0
+                ):
+                    res_max = self.settings.paper_resolution_max_hours / 24.0
+                    res_min = 0.0  # Start from now
+
+                if res_max > 0 or res_min > 0:
                     pre_filter_count = len(high_vol_markets)
                     high_vol_markets = self.scanner.filter_by_resolution_window(
                         high_vol_markets,
-                        min_days=self.settings.resolution_min_days,
-                        max_days=self.settings.resolution_max_days,
+                        min_days=res_min,
+                        max_days=res_max,
                     )
                     if pre_filter_count != len(high_vol_markets):
+                        label = f"{res_max * 24:.0f}h" if res_max < 1 else f"{res_max:.0f}d"
                         log.info(
-                            "🕐 Resolution window [%.0f-%.0f days]: %d → %d markets",
-                            self.settings.resolution_min_days,
-                            self.settings.resolution_max_days,
+                            "🕐 Resolution window [%s]: %d → %d markets",
+                            label,
                             pre_filter_count,
                             len(high_vol_markets),
                         )

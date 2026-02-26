@@ -90,6 +90,24 @@ class ConditionalArbStrategy(Strategy):
             if len(brackets) < MIN_BRACKETS:
                 continue
 
+            # Skip groups where ANY bracket's end_date is in the past
+            # (dead/expired markets that will never resolve).
+            from datetime import datetime as _dt, timezone as _tz
+            _now_utc = _dt.now(_tz.utc)
+            has_expired = False
+            for b in brackets:
+                ed = b.get("end_date")
+                if ed:
+                    try:
+                        edt = _dt.fromisoformat(ed.replace("Z", "+00:00")) if "T" in ed or "+" in ed else _dt.strptime(ed, "%Y-%m-%d").replace(tzinfo=_tz.utc)
+                        if edt < _now_utc:
+                            has_expired = True
+                            break
+                    except (ValueError, TypeError):
+                        pass
+            if has_expired:
+                continue
+
             # Cooldown
             if now - self._signal_cooldown.get(group_id, 0) < self._cooldown_seconds:
                 continue

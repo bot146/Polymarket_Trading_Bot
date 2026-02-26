@@ -447,13 +447,18 @@ class MarketScanner:
 
     @staticmethod
     def hours_to_resolution(end_date: str | None) -> float | None:
-        """Return hours until market resolution, or None if unknown."""
+        """Return hours until market resolution, or None if unknown.
+
+        Returns a **negative** value for markets whose end_date is already
+        in the past.  Callers that need non-negative values should clamp
+        explicitly; ``filter_by_resolution_window()`` relies on negative
+        values to exclude expired markets.
+        """
         dt = MarketScanner.parse_end_date(end_date)
         if dt is None:
             return None
         now = datetime.now(timezone.utc)
-        delta = (dt - now).total_seconds() / 3600.0
-        return max(delta, 0.0)
+        return (dt - now).total_seconds() / 3600.0
 
     def filter_by_resolution_window(
         self,
@@ -492,6 +497,11 @@ class MarketScanner:
                     # No max → include markets without dates
                     filtered.append(market)
                     continue
+
+            # Exclude markets whose end_date is already in the past
+            if hours < 0:
+                excluded_outside += 1
+                continue
 
             if min_hours > 0 and hours < min_hours:
                 excluded_outside += 1

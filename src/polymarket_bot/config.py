@@ -126,11 +126,12 @@ class Settings:
     paper_fill_probability: Decimal = Decimal("0.5")  # 50% fill chance for maker
     paper_require_volume_cross: bool = True            # Require volume to cross price level
     paper_random_seed: int | None = None               # Deterministic paper fills when set
-    paper_start_balance: Decimal = Decimal("100")      # Starting virtual bankroll in paper mode
+    paper_start_balance: Decimal = Decimal("40")       # Starting virtual bankroll in paper mode
     paper_wallet_path: str = ""                        # Optional runtime wallet config file path
     paper_sizing_tiers: str = "100:1.00,1000:1.10,5000:1.20,10000:1.30"
     paper_wallet_refresh_seconds: float = 5.0
     paper_reset_on_start: bool = True                   # Reset positions/wallet each paper restart
+    paper_resolution_max_hours: float = 72.0             # Paper-only resolution window (hours); 0 = use global
 
     # Runtime config reload
     runtime_reload_env: bool = True
@@ -271,6 +272,7 @@ def load_settings(env_file: str | None = None) -> Settings:
         paper_sizing_tiers=os.getenv("PAPER_SIZING_TIERS", "100:1.00,1000:1.10,5000:1.20,10000:1.30").strip(),
         paper_wallet_refresh_seconds=float(os.getenv("PAPER_WALLET_REFRESH_SECONDS", "5.0")),
         paper_reset_on_start=parse_bool(os.getenv("PAPER_RESET_ON_START"), True),
+        paper_resolution_max_hours=float(os.getenv("PAPER_RESOLUTION_MAX_HOURS", "72.0")),
 
         runtime_reload_env=parse_bool(os.getenv("RUNTIME_RELOAD_ENV"), True),
         runtime_reload_seconds=float(os.getenv("RUNTIME_RELOAD_SECONDS", "5.0")),

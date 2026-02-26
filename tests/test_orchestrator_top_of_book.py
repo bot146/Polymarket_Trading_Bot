@@ -79,6 +79,9 @@ class _Settings:
     resolution_priority_weight = 0.5
     edge_priority_weight = 0.5
     resolution_sweet_spot_hours = 24.0
+    # paper mode
+    trading_mode = "paper"
+    paper_resolution_max_hours = 0.0  # Disabled in tests
 
 
 def test_orchestrator_prefers_wss_best_ask_over_gamma_price(monkeypatch):
