@@ -55,6 +55,10 @@ class MarketInfo:
     one_day_price_change: float | None = None
     best_bid: Decimal | None = None
     best_ask: Decimal | None = None
+    # Series / short-duration metadata
+    series_ticker: str | None = None       # e.g. "btc-up-or-down-5m"
+    event_start_time: str | None = None    # Precise event window start
+    fee_type: str | None = None            # e.g. "crypto_15_min"
 
 
 @dataclass(frozen=True)
@@ -295,6 +299,100 @@ class MarketScanner:
             
         return crypto_markets
 
+    def get_short_duration_markets(
+        self,
+        min_liquidity: Decimal = Decimal("500"),
+        limit: int = 200,
+    ) -> list[MarketInfo]:
+        """Find short-duration / recurring markets (e.g., 5-min crypto Up/Down).
+
+        These markets have $0 volume at creation but significant AMM liquidity,
+        so the normal volume-based scan misses them entirely.  We identify them
+        by series slug, question pattern, or fee-type metadata.
+
+        Args:
+            min_liquidity: Minimum liquidity in USDC (replaces volume filter).
+            limit: Maximum markets to fetch from API (sorted by createdAt desc).
+
+        Returns:
+            List of short-duration ``MarketInfo`` objects.
+        """
+        try:
+            # Fetch newest markets by creation time — these often have $0 volume
+            params: dict[str, Any] = {
+                "limit": limit,
+                "active": True,
+                "closed": False,
+                "order": "createdAt",
+                "ascending": False,
+            }
+            response = self._get("/markets", params=params)
+            if not isinstance(response, list):
+                return []
+
+            markets: list[MarketInfo] = []
+            series_counts: dict[str, int] = {}
+            for data in response:
+                try:
+                    market = self._parse_market(data)
+                except Exception:
+                    continue
+
+                if not market.active:
+                    continue
+
+                # ── Identify short-duration / recurring markets ──────
+                is_short = False
+                series = market.series_ticker or ""
+                question_lower = market.question.lower()
+                fee = market.fee_type or ""
+
+                # 1. Series slug contains a recurrence suffix
+                if any(pat in series for pat in ["-5m", "-15m", "-30m", "-1h"]):
+                    is_short = True
+                # 2. Question text suggests short-duration event
+                elif any(pat in question_lower for pat in [
+                    "up or down",
+                    "over or under",
+                    "5-minute",
+                    "15-minute",
+                    "30-minute",
+                ]):
+                    is_short = True
+                # 3. Crypto-specific short-duration fee type
+                elif "crypto" in fee and market.event_start_time:
+                    is_short = True
+
+                if not is_short:
+                    continue
+
+                # Liquidity filter (these markets have AMM liquidity, not volume)
+                if market.liquidity < min_liquidity:
+                    continue
+
+                # Track by series for logging
+                bucket = series or "unknown"
+                series_counts[bucket] = series_counts.get(bucket, 0) + 1
+
+                markets.append(market)
+
+            # Summary log
+            if markets:
+                parts = [f"{slug}={cnt}" for slug, cnt in sorted(series_counts.items())]
+                log.info(
+                    "🔍 Short-duration scan: %d markets found — %s",
+                    len(markets),
+                    ", ".join(parts),
+                )
+            else:
+                log.debug("Short-duration scan: 0 markets found (from %d recent)", len(response))
+
+            return markets
+
+        except Exception as e:
+            log.error("Failed to fetch short-duration markets: %s", e)
+            return []
+
     def _parse_market(self, data: dict[str, Any]) -> MarketInfo:
         """Parse market data from Gamma API response.
 
@@ -371,7 +469,8 @@ class MarketScanner:
         return MarketInfo(
             condition_id=str(data.get("conditionId") or data.get("condition_id") or ""),
             question=str(data.get("question", "")),
-            end_date=data.get("endDateIso") or data.get("end_date_iso"),
+            # Prefer precise endDate (with time) over day-only endDateIso
+            end_date=data.get("endDate") or data.get("endDateIso") or data.get("end_date_iso"),
             tokens=tokens,
             volume=market_volume,
             liquidity=Decimal(str(data.get("liquidity", 0))),
@@ -388,6 +487,9 @@ class MarketScanner:
             one_day_price_change=float(data["oneDayPriceChange"]) if data.get("oneDayPriceChange") is not None else None,
             best_bid=_dec_or_none("bestBid"),
             best_ask=_dec_or_none("bestAsk"),
+            series_ticker=data.get("seriesSlug") or None,
+            event_start_time=data.get("eventStartTime") or None,
+            fee_type=data.get("feeType") or None,
         )
 
     def refresh_cache(self, force: bool = False) -> None:

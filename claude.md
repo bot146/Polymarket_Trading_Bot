@@ -41,12 +41,13 @@ opportunities) and executes paper or live trades via the CLOB API.
 
 ### Data flow
 1. `MarketScanner` fetches high-volume markets from Gamma API
-2. Resolution-time filter narrows to configured window (paper: 12h, live: 30d)
-3. `StrategyOrchestrator.scan_and_collect_signals()` feeds markets to each enabled strategy
-4. `prioritize_signals()` scores by composite (edge × weight + time × weight)
-5. `filter_actionable_signals()` deduplicates, checks stacking limits
-6. `UnifiedExecutor.execute_signal()` places paper/live orders
-7. `PositionCloser` checks exits every 15s; `ResolutionMonitor` checks resolutions every 60s
+2. `MarketScanner.get_short_duration_markets()` fetches recurring/5-min markets by creation time
+3. Resolution-time filter narrows to configured window (paper: 72h, live: 30d)
+4. `StrategyOrchestrator.scan_and_collect_signals()` feeds markets to each enabled strategy
+5. `prioritize_signals()` scores by composite (edge × weight + time × weight)
+6. `filter_actionable_signals()` deduplicates, checks stacking limits
+7. `UnifiedExecutor.execute_signal()` places paper/live orders
+8. `PositionCloser` checks exits every 15s; `ResolutionMonitor` checks resolutions every 60s
 
 ## Key Design Decisions
 
@@ -65,9 +66,20 @@ When `PAPER_RESET_ON_START=true` (default), every restart:
 This prevents stale positions from blocking new signals via "max stacks reached".
 
 ### Paper vs Live Resolution Window
-- Paper mode uses `PAPER_RESOLUTION_MAX_HOURS` (default 12h) to focus on
+- Paper mode uses `PAPER_RESOLUTION_MAX_HOURS` (default 72h) to focus on
   markets that resolve quickly, so we capture actual realized P&L for testing.
 - Live mode uses `RESOLUTION_MAX_DAYS` (default 30d) for broader opportunity set.
+
+### Short-Duration Markets (5-min crypto, sports, esports)
+- `get_short_duration_markets()` fetches by `createdAt` desc, bypassing volume filter
+- These markets have $0 volume at creation but $9k-$18k AMM liquidity
+- Identified by series slug (`-5m`, `-15m`), question pattern ("up or down"),
+  or crypto fee type (`crypto_15_min`)
+- **10% taker fee** (1000 bps) vs standard 2% — important for edge calculation
+- `endDate` field preferred over `endDateIso` for precise resolution timing
+- `MarketInfo` now includes: `series_ticker`, `event_start_time`, `fee_type`
+- Active series: BTC, ETH, SOL, XRP (4 × ~39 markets/day = ~155 total)
+- Sports markets (`sports_fees`) and esports also visible but not matched by scanner
 
 ## Wallet & Credentials
 - **Proxy wallet**: `0x0df18f2e85aa500635ec19504f3713fdbe0754cc`
@@ -88,8 +100,9 @@ All persisted under `~/.polymarket_bot/`:
 ```bash
 .venv\Scripts\python.exe -m pytest tests/ -v
 ```
-120 tests covering: strategies, position management, paper fills, P&L accuracy,
-resolution filtering, priority scoring, clean restart, risk rails.
+140 tests covering: strategies, position management, paper fills, P&L accuracy,
+resolution filtering, priority scoring, clean restart, risk rails,
+short-duration market scanning.
 
 ## Common Pitfalls
 1. **Don't use `app.py`** — it's the old single-pair entrypoint
@@ -105,10 +118,12 @@ resolution filtering, priority scoring, clean restart, risk rails.
 |---|---|---|
 | `TRADING_MODE` | `paper` | `paper` or `live` |
 | `PAPER_START_BALANCE` | `40` | Virtual starting balance |
-| `PAPER_RESOLUTION_MAX_HOURS` | `12` | Paper-only: max hours to resolution |
+| `PAPER_RESOLUTION_MAX_HOURS` | `72` | Paper-only: max hours to resolution |
 | `RESOLUTION_MAX_DAYS` | `30` | Live: max days to resolution |
 | `MAX_CONCURRENT_TRADES` | `20` | Max simultaneous positions |
 | `MAX_ARB_STACKS` | `3` | Max stacked entries per condition |
 | `MAX_ORDER_USDC` | `20` | Max order size |
 | `MIN_EDGE_CENTS` | `0.5` | Minimum edge to act on |
 | `PAPER_RESET_ON_START` | `true` | Clean restart each time |
+| `ENABLE_SHORT_DURATION_SCAN` | `true` | Scan for 5-min crypto markets |
+| `SHORT_DURATION_MIN_LIQUIDITY` | `500` | Min liquidity for short-duration markets |

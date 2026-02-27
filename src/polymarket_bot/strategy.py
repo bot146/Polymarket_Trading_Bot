@@ -27,6 +27,8 @@ class StrategyType(str, Enum):
     CONDITIONAL_ARB = "conditional_arb"
     LIQUIDITY_REWARDS = "liquidity_rewards"
     NEAR_RESOLUTION = "near_resolution"
+    SHORT_DURATION = "short_duration"
+    ORACLE_SNIPING = "oracle_sniping"
 
 
 @dataclass(frozen=True)

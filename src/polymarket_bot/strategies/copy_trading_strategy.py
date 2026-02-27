@@ -142,7 +142,8 @@ class CopyTradingStrategy(Strategy):
 
             # Expected profit assumes convergence to fair value
             # Conservative: assume 5% edge
-            fee = copy_price * self.taker_fee_rate
+            # Polymarket fee: fee_rate * min(price, 1-price)
+            fee = self.taker_fee_rate * min(copy_price, Decimal("1") - copy_price)
             expected_edge = copy_price * Decimal("0.05")
             expected_profit = (expected_edge - fee) * copy_size
 

@@ -177,6 +177,13 @@ class _MinSettings:
     resolution_sweet_spot_hours = 24.0
     trading_mode = "paper"
     paper_resolution_max_hours = 0.0
+    # short-duration strategy settings
+    enable_short_duration_strategy = False
+    short_duration_min_probability = Decimal("0.53")
+    short_duration_min_edge_cents = Decimal("0.5")
+    short_duration_prefer_maker = True
+    short_duration_max_order_usdc = Decimal("5")
+    short_duration_cooldown_seconds = 60.0
 
 
 class TestPrioritizeSignals:

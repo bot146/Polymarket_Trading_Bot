@@ -105,8 +105,10 @@ class ArbitrageStrategy(Strategy):
 
             # Calculate edge (after fees)
             total_cost = yes_ask + no_ask
-            # Fees apply to both legs: taker_fee on YES buy + taker_fee on NO buy
-            total_fees = (yes_ask * self.taker_fee_rate) + (no_ask * self.taker_fee_rate)
+            # Polymarket fee formula: fee_rate * min(price, 1-price) per leg
+            yes_fee = self.taker_fee_rate * min(yes_ask, Decimal("1") - yes_ask)
+            no_fee = self.taker_fee_rate * min(no_ask, Decimal("1") - no_ask)
+            total_fees = yes_fee + no_fee
             edge = Decimal("1") - total_cost - total_fees
             edge_cents = edge * Decimal("100")
 
@@ -185,8 +187,11 @@ class ArbitrageStrategy(Strategy):
 
         # Verify edge is still positive (including fees)
         total_cost = signal.trades[0].price + signal.trades[1].price
-        total_with_fees = total_cost * (Decimal("1") + self.taker_fee_rate)
-        if total_with_fees >= Decimal("1"):
+        p0 = signal.trades[0].price
+        p1 = signal.trades[1].price
+        total_fees = (self.taker_fee_rate * min(p0, Decimal("1") - p0)
+                      + self.taker_fee_rate * min(p1, Decimal("1") - p1))
+        if total_cost + total_fees >= Decimal("1"):
             return False, "edge_disappeared"
 
         return True, "ok"

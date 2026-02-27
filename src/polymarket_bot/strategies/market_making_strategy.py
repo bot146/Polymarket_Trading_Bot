@@ -197,8 +197,15 @@ class MarketMakingStrategy(Strategy):
         # Expected profit heuristic: spread capture minus maker fees on both legs.
         y_gross = (y_quote_ask - y_quote_bid) * y_size
         n_gross = (n_quote_ask - n_quote_bid) * n_size
-        y_fee = (y_quote_bid * y_size + y_quote_ask * y_size) * self.config.maker_fee_rate
-        n_fee = (n_quote_bid * n_size + n_quote_ask * n_size) * self.config.maker_fee_rate
+        # Polymarket fee: fee_rate * min(price, 1-price) per transaction
+        y_fee = (
+            self.config.maker_fee_rate * min(y_quote_bid, Decimal("1") - y_quote_bid) * y_size
+            + self.config.maker_fee_rate * min(y_quote_ask, Decimal("1") - y_quote_ask) * y_size
+        )
+        n_fee = (
+            self.config.maker_fee_rate * min(n_quote_bid, Decimal("1") - n_quote_bid) * n_size
+            + self.config.maker_fee_rate * min(n_quote_ask, Decimal("1") - n_quote_ask) * n_size
+        )
         expected_profit = y_gross + n_gross - y_fee - n_fee
 
         # Skip if expected profit after fees is negative

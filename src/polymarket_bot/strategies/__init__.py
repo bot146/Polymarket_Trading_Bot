@@ -9,6 +9,7 @@ from polymarket_bot.strategies.market_making_strategy import MarketMakingStrateg
 from polymarket_bot.strategies.multi_outcome_arb_strategy import MultiOutcomeArbStrategy
 from polymarket_bot.strategies.near_resolution_strategy import NearResolutionStrategy
 from polymarket_bot.strategies.oracle_sniping_strategy import OracleSnipingStrategy
+from polymarket_bot.strategies.short_duration_strategy import ShortDurationStrategy
 from polymarket_bot.strategies.sniping_strategy import SnipingStrategy
 from polymarket_bot.strategies.statistical_arbitrage_strategy import StatisticalArbitrageStrategy
 from polymarket_bot.strategies.value_betting_strategy import ValueBettingStrategy
@@ -23,6 +24,7 @@ __all__ = [
 	"MultiOutcomeArbStrategy",
 	"NearResolutionStrategy",
 	"OracleSnipingStrategy",
+	"ShortDurationStrategy",
 	"SnipingStrategy",
 	"StatisticalArbitrageStrategy",
 	"ValueBettingStrategy",

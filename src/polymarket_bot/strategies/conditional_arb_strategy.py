@@ -208,7 +208,11 @@ class ConditionalArbStrategy(Strategy):
         for k in range(1, n):
             lower_bid = prefix_bid[k]            # SUM(bid[:k])
             upper_cost = suffix_ask[k]           # SUM(ask[k:])
-            upper_fees = upper_cost * self.taker_fee_rate
+            # Polymarket fee: fee_rate * min(price, 1-price) per bracket
+            upper_fees = sum(
+                self.taker_fee_rate * min(bracket_data[i]["best_ask"], Decimal("1") - bracket_data[i]["best_ask"])
+                for i in range(k, n)
+            )
             implied_upper = Decimal("1") - lower_bid
             edge = implied_upper - upper_cost - upper_fees
 

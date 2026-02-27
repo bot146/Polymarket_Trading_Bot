@@ -315,7 +315,8 @@ class OracleSnipingStrategy(Strategy):
             ask_price = Decimal(str(ask_price))
 
             # Only trade if there's significant discount (after fees)
-            fee = ask_price * self.taker_fee_rate
+            # Polymarket fee: fee_rate * min(price, 1-price)
+            fee = self.taker_fee_rate * min(ask_price, Decimal("1") - ask_price)
             net_profit_per_share = Decimal("1") - ask_price - fee
 
             # Need at least 3 cents profit after fees
@@ -336,7 +337,7 @@ class OracleSnipingStrategy(Strategy):
             expected_profit = net_profit_per_share * size
 
             opportunity = Opportunity(
-                strategy_type=StrategyType.GUARANTEED_WIN,  # Reuse — it's conceptually similar
+                strategy_type=StrategyType.ORACLE_SNIPING,
                 expected_profit=expected_profit,
                 confidence=Decimal("0.98"),
                 urgency=10,  # CRITICAL — these disappear fast

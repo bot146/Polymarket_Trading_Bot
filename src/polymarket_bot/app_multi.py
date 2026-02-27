@@ -92,6 +92,15 @@ def print_stats(
     log.info(f"📈 EXECUTIONS: total={exec_stats['total_executions']} success={exec_stats['successful']} failed={exec_stats['failed']}")
     log.info(f"🎯 STRATEGIES: {orch_stats['enabled_strategies']} enabled")
 
+    # Short-duration / recurring market visibility
+    sd_count = orch_stats.get("short_duration_markets", 0)
+    sd_series = orch_stats.get("short_duration_series", {})
+    if sd_count > 0:
+        parts = [f"{slug}={cnt}" for slug, cnt in sorted(sd_series.items())]
+        log.info(f"⚡ SHORT-DURATION: {sd_count} markets — {', '.join(parts)}")
+    else:
+        log.info("⚡ SHORT-DURATION: 0 markets (none currently live)")
+
     if paper_wallet_snapshot is not None:
         log.info(
             "💼 WALLET: equity=$%.2f start=$%.2f adj=$%.2f size_mult=x%.2f dyn_max=$%.2f",
@@ -405,6 +414,8 @@ class BotRunner:
             enable_near_resolution=settings.enable_near_resolution,
             enable_arb_stacking=settings.enable_arb_stacking,
             max_arb_stacks=settings.max_arb_stacks,
+            enable_short_duration=settings.enable_short_duration_strategy,
+            scan_short_duration=settings.enable_short_duration_scan,
         )
         self.orch_config = orch_config
         self.orchestrator = StrategyOrchestrator(settings, orch_config)

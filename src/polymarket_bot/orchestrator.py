@@ -25,6 +25,7 @@ from polymarket_bot.strategies.market_making_strategy import MarketMakingConfig,
 from polymarket_bot.strategies.multi_outcome_arb_strategy import MultiOutcomeArbStrategy
 from polymarket_bot.strategies.near_resolution_strategy import NearResolutionStrategy
 from polymarket_bot.strategies.oracle_sniping_strategy import OracleSnipingStrategy
+from polymarket_bot.strategies.short_duration_strategy import ShortDurationConfig, ShortDurationStrategy
 from polymarket_bot.strategies.sniping_strategy import SnipingConfig, SnipingStrategy
 from polymarket_bot.strategies.statistical_arbitrage_strategy import StatisticalArbitrageStrategy
 from polymarket_bot.strategies.value_betting_strategy import ValueBettingConfig, ValueBettingStrategy
@@ -49,12 +50,14 @@ class OrchestratorConfig:
     enable_conditional_arb: bool = False     # Cumulative bracket arb
     enable_liquidity_rewards: bool = False   # Liquidity reward harvesting
     enable_near_resolution: bool = False     # Near-resolution sniping
+    enable_short_duration: bool = True       # Short-duration momentum (5-min crypto)
     enable_arb_stacking: bool = False        # Allow N stacked positions on same arb group
     max_arb_stacks: int = 3                  # Max stacked positions per group
     
     # Market scanning
     scan_high_volume: bool = True
     scan_resolved: bool = True
+    scan_short_duration: bool = True  # Scan for 5-min crypto and other short markets
     # min_volume will be taken from Settings.min_market_volume
     
     def __post_init__(self):
@@ -91,6 +94,8 @@ class StrategyOrchestrator:
         self._dynamic_max_order_usdc: Decimal | None = None
         self._dynamic_min_order_usdc: Decimal | None = None
         self._dynamic_initial_order_pct: Decimal | None = None
+        self._short_duration_count = 0       # Latest short-duration market count
+        self._short_duration_series: dict[str, int] = {}  # Series → count breakdown
 
     def _init_strategies(self) -> None:
         """Initialize and register trading strategies."""
@@ -214,6 +219,21 @@ class StrategyOrchestrator:
             )
             self.registry.register(nr_strategy)
             log.info("Registered: NearResolutionStrategy")
+
+        if self.config.enable_short_duration:
+            sd_config = ShortDurationConfig(
+                min_probability=self.settings.short_duration_min_probability,
+                min_edge_cents=self.settings.short_duration_min_edge_cents,
+                taker_fee_rate=self.settings.taker_fee_rate,
+                maker_fee_rate=self.settings.maker_fee_rate,
+                prefer_maker=self.settings.short_duration_prefer_maker,
+                max_order_usdc=self.settings.short_duration_max_order_usdc,
+                cooldown_seconds=self.settings.short_duration_cooldown_seconds,
+            )
+            sd_strategy = ShortDurationStrategy(config=sd_config, enabled=True)
+            self.registry.register(sd_strategy)
+            log.info("Registered: ShortDurationStrategy (maker_pref=%s, min_prob=%.0f%%)",
+                     sd_config.prefer_maker, float(sd_config.min_probability * 100))
 
     def scan_and_collect_signals(self) -> list[StrategySignal]:
         """Scan markets and collect signals from all strategies."""
@@ -513,7 +533,68 @@ class StrategyOrchestrator:
                         ],
                     }
                     market_data["markets"].append(market_dict)
-            
+
+            # ── Short-duration / recurring markets (e.g. 5-min crypto) ──
+            if self.config.scan_short_duration and self.settings.enable_short_duration_scan:
+                sd_markets = self.scanner.get_short_duration_markets(
+                    min_liquidity=self.settings.short_duration_min_liquidity,
+                )
+                # Deduplicate against markets already gathered by the volume scan
+                existing_cids = {m["condition_id"] for m in market_data["markets"]}
+                new_sd = [m for m in sd_markets if m.condition_id not in existing_cids]
+
+                # Track stats for logging
+                series_counts: dict[str, int] = {}
+                for m in sd_markets:
+                    bucket = m.series_ticker or "unknown"
+                    series_counts[bucket] = series_counts.get(bucket, 0) + 1
+                self._short_duration_count = len(sd_markets)
+                self._short_duration_series = series_counts
+
+                # Add to market pool for strategy evaluation
+                for market in new_sd:
+                    hours = self.scanner.hours_to_resolution(market.end_date)
+                    hours_str = f"{hours:.1f}h" if hours is not None else "?"
+                    log.debug(
+                        "  ➕ short-duration: %s (liq=$%.0f, resolves=%s, series=%s)",
+                        market.question[:60],
+                        float(market.liquidity),
+                        hours_str,
+                        market.series_ticker or "?",
+                    )
+                    market_dict = {
+                        "condition_id": market.condition_id,
+                        "question": market.question,
+                        "volume": float(market.volume),
+                        "active": market.active,
+                        "neg_risk_market_id": market.neg_risk_market_id,
+                        "group_item_title": market.group_item_title,
+                        "end_date": market.end_date,
+                        "liquidity": float(market.liquidity),
+                        "spread": float(market.spread) if market.spread is not None else None,
+                        "one_day_price_change": market.one_day_price_change,
+                        "rewards_min_size": float(market.rewards_min_size) if market.rewards_min_size is not None else None,
+                        "rewards_max_spread": float(market.rewards_max_spread) if market.rewards_max_spread is not None else None,
+                        "rewards_daily_rate": float(market.rewards_daily_rate) if market.rewards_daily_rate is not None else None,
+                        "tokens": [
+                            {
+                                "token_id": token.token_id,
+                                "outcome": token.outcome,
+                                "price": float(token.price),
+                                "best_bid": None,
+                                "best_ask": float(token.price),
+                                "volume": float(token.volume),
+                            }
+                            for token in market.tokens
+                        ],
+                    }
+                    market_data["markets"].append(market_dict)
+                if new_sd:
+                    log.info(
+                        "📡 Short-duration: added %d markets to universe (%d total in scan, %d already present)",
+                        len(new_sd), len(sd_markets), len(sd_markets) - len(new_sd),
+                    )
+
             # Scan resolved markets for guaranteed wins
             if self.config.scan_resolved:
                 resolved_markets = self.scanner.get_resolved_markets(limit=None)  # Scan all resolved markets
@@ -721,6 +802,8 @@ class StrategyOrchestrator:
             "total_signals_executed": self.total_signals_executed,
             "active_positions": len(self.active_positions),
             "enabled_strategies": len(self.registry.get_enabled()),
+            "short_duration_markets": self._short_duration_count,
+            "short_duration_series": dict(self._short_duration_series),
         }
 
     def get_top_of_book_snapshot(self) -> dict[str, dict[str, float]]:

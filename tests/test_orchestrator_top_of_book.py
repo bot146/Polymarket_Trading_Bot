@@ -82,6 +82,13 @@ class _Settings:
     # paper mode
     trading_mode = "paper"
     paper_resolution_max_hours = 0.0  # Disabled in tests
+    # short-duration strategy settings
+    enable_short_duration_strategy = False
+    short_duration_min_probability = Decimal("0.53")
+    short_duration_min_edge_cents = Decimal("0.5")
+    short_duration_prefer_maker = True
+    short_duration_max_order_usdc = Decimal("5")
+    short_duration_cooldown_seconds = 60.0
 
 
 def test_orchestrator_prefers_wss_best_ask_over_gamma_price(monkeypatch):

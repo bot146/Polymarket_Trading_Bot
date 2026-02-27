@@ -94,7 +94,8 @@ class GuaranteedWinStrategy(Strategy):
             ask_price = Decimal(str(ask_price))
 
             # Calculate discount from $1 (after fees)
-            fee = ask_price * self.taker_fee_rate
+            # Polymarket fee: fee_rate * min(price, 1-price)
+            fee = self.taker_fee_rate * min(ask_price, Decimal("1") - ask_price)
             discount = Decimal("1") - ask_price - fee
             discount_cents = discount * Decimal("100")
 

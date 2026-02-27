@@ -69,6 +69,18 @@ class Settings:
     market_fetch_limit: int = 10000  # Max markets to fetch from API (0 = use DEFAULT_FETCH_LIMIT)
     min_market_volume: Decimal = Decimal("1000")  # Minimum volume threshold in USDC
 
+    # Short-duration / recurring market scanning
+    enable_short_duration_scan: bool = True  # Scan for 5-min crypto and other short markets
+    short_duration_min_liquidity: Decimal = Decimal("500")  # Min liquidity (replaces volume filter)
+
+    # Short-duration momentum strategy
+    enable_short_duration_strategy: bool = True  # Enable momentum-based 5-min trading
+    short_duration_max_order_usdc: Decimal = Decimal("5")  # Max per-trade (conservative for 5-min)
+    short_duration_min_probability: Decimal = Decimal("0.53")  # Min P(direction) to act
+    short_duration_min_edge_cents: Decimal = Decimal("0.5")  # Min edge in cents after fees
+    short_duration_prefer_maker: bool = True  # Use GTC maker (0.5% fee) not FOK taker (10%)
+    short_duration_cooldown_seconds: float = 60.0  # Per-market signal cooldown
+
     # Resolution time window (filter markets by expected end date)
     resolution_min_days: float = 0.0   # Min days to resolution (0 = no minimum)
     resolution_max_days: float = 30.0  # Max days to resolution (0 = no maximum)
@@ -131,7 +143,7 @@ class Settings:
     paper_sizing_tiers: str = "100:1.00,1000:1.10,5000:1.20,10000:1.30"
     paper_wallet_refresh_seconds: float = 5.0
     paper_reset_on_start: bool = True                   # Reset positions/wallet each paper restart
-    paper_resolution_max_hours: float = 72.0             # Paper-only resolution window (hours); 0 = use global
+    paper_resolution_max_hours: float = 12.0             # Paper-only resolution window (hours); 0 = use global
 
     # Runtime config reload
     runtime_reload_env: bool = True
@@ -212,6 +224,16 @@ def load_settings(env_file: str | None = None) -> Settings:
         
         market_fetch_limit=int(os.getenv("MARKET_FETCH_LIMIT", "10000")),
         min_market_volume=Decimal(os.getenv("MIN_MARKET_VOLUME", "1000")),
+        enable_short_duration_scan=parse_bool(os.getenv("ENABLE_SHORT_DURATION_SCAN"), True),
+        short_duration_min_liquidity=Decimal(os.getenv("SHORT_DURATION_MIN_LIQUIDITY", "500")),
+
+        # Short-duration momentum strategy
+        enable_short_duration_strategy=parse_bool(os.getenv("ENABLE_SHORT_DURATION"), True),
+        short_duration_max_order_usdc=Decimal(os.getenv("SHORT_DURATION_MAX_ORDER_USDC", "5")),
+        short_duration_min_probability=Decimal(os.getenv("SHORT_DURATION_MIN_PROBABILITY", "0.53")),
+        short_duration_min_edge_cents=Decimal(os.getenv("SHORT_DURATION_MIN_EDGE_CENTS", "0.5")),
+        short_duration_prefer_maker=parse_bool(os.getenv("SHORT_DURATION_PREFER_MAKER"), True),
+        short_duration_cooldown_seconds=float(os.getenv("SHORT_DURATION_COOLDOWN_SECONDS", "60")),
 
         resolution_min_days=float(os.getenv("RESOLUTION_MIN_DAYS", "0")),
         resolution_max_days=float(os.getenv("RESOLUTION_MAX_DAYS", "30")),

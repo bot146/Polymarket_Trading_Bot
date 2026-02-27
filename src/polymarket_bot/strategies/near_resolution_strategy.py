@@ -108,7 +108,8 @@ class NearResolutionStrategy(Strategy):
                 continue
 
             best_ask = Decimal(str(best_token["best_ask"]))
-            fee = best_ask * self.taker_fee_rate
+            # Polymarket fee: fee_rate * min(price, 1-price)
+            fee = self.taker_fee_rate * min(best_ask, Decimal("1") - best_ask)
             edge = Decimal("1") - best_ask - fee
             edge_cents = edge * Decimal("100")
 
@@ -116,7 +117,7 @@ class NearResolutionStrategy(Strategy):
                 continue
 
             # Size — how many shares can we buy (including fees)?
-            cost_per_share = best_ask * (Decimal("1") + self.taker_fee_rate)
+            cost_per_share = best_ask + fee
             size = (self.max_order_usdc / cost_per_share).quantize(Decimal("0.01"))
             if size <= 0:
                 continue
@@ -192,15 +193,15 @@ class NearResolutionStrategy(Strategy):
             return None
 
     def _find_near_certain_token(self, tokens: list[dict]) -> dict | None:
-        """Find a YES token trading at ≥ min_yes_price with a valid best_ask."""
+        """Find any token (YES or NO) trading at ≥ min_yes_price with a valid best_ask.
+
+        Both YES and NO tokens can be near-certain — a NO at $0.97 means the
+        market outcome is almost certainly NO, which is just as tradeable.
+        """
         best: dict | None = None
         best_price = Decimal("0")
 
         for t in tokens:
-            if t.get("outcome", "").upper() not in ("YES", ""):
-                # Only consider YES tokens (or unlabelled ones)
-                continue
-
             best_ask = t.get("best_ask")
             if best_ask is None or best_ask <= 0:
                 continue

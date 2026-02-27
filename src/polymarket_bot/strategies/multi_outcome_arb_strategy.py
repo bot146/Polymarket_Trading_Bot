@@ -152,7 +152,11 @@ class MultiOutcomeArbStrategy(Strategy):
 
             # 4. Calculate edge
             sum_ask = sum(yes_asks)
-            total_fees = sum_ask * self.taker_fee_rate
+            # Polymarket fee: fee_rate * min(price, 1-price) per bracket
+            total_fees = sum(
+                self.taker_fee_rate * min(a, Decimal("1") - a)
+                for a in yes_asks
+            )
             edge = Decimal("1") - sum_ask - total_fees
             edge_cents = edge * Decimal("100")
 
