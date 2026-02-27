@@ -47,29 +47,19 @@ def signal_handler(signum, frame):
 
 def print_banner():
     """Print startup banner."""
-    banner = """
-╔══════════════════════════════════════════════════════════════╗
-║                                                              ║
-║     POLYMARKET MULTI-STRATEGY TRADING BOT                   ║
-║                                                              ║
-║     Full Trade Lifecycle: Entry → Monitoring → Exit         ║
-║     Strategies: Arbitrage, Guaranteed Win, Stat Arb         ║
-║     Built with precision. Designed for profit.              ║
-║                                                              ║
-╚══════════════════════════════════════════════════════════════╝
-"""
+    banner = (
+        "\n"
+        "==============================================================\n"
+        "  POLYMARKET MULTI-STRATEGY TRADING BOT\n"
+        "  Full Trade Lifecycle: Entry -> Monitoring -> Exit\n"
+        "  Strategies: Arbitrage, Guaranteed Win, Stat Arb\n"
+        "  Built with precision. Designed for profit.\n"
+        "==============================================================\n"
+    )
     try:
         print(banner)
-    except UnicodeEncodeError:
-        fallback = (
-            "\n"
-            "==============================================================\n"
-            "  POLYMARKET MULTI-STRATEGY TRADING BOT\n"
-            "  Full Trade Lifecycle: Entry -> Monitoring -> Exit\n"
-            "  Strategies: Arbitrage, Guaranteed Win, Stat Arb\n"
-            "==============================================================\n"
-        )
-        print(fallback)
+    except (UnicodeEncodeError, OSError):
+        pass
 
 
 def print_stats(
@@ -398,7 +388,7 @@ class BotRunner:
 
         # ── Orchestrator & executor ───────────────────────────────────
         orch_config = OrchestratorConfig(
-            scan_interval=2.0,
+            scan_interval=settings.scan_interval,
             max_concurrent_trades=settings.max_concurrent_trades,
             enable_arbitrage=settings.enable_arbitrage,
             enable_guaranteed_win=settings.enable_guaranteed_win,
