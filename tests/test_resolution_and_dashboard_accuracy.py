@@ -236,7 +236,7 @@ def test_resolution_monitor_uses_token_lookup_fallback_for_brackets(tmp_path) ->
     assert loser_pos is not None and loser_pos.is_closed
 
 
-def test_dashboard_uses_daily_pnl_and_expected_labels() -> None:
+def test_dashboard_uses_daily_pnl_and_actual_pnl_labels() -> None:
     stats = {
         "uptime_seconds": 60,
         "executor": {
@@ -248,9 +248,17 @@ def test_dashboard_uses_daily_pnl_and_expected_labels() -> None:
             "paper_roi": 15.0,
             "portfolio": {
                 "open_positions": 1,
-                "total_realized_pnl": 0.0,
+                "closed_positions": 3,
+                "total_positions": 4,
+                "total_realized_pnl": 0.5,
                 "total_unrealized_pnl": 0.2,
-                "total_pnl": 0.2,
+                "total_pnl": 0.7,
+                "total_cost_basis": 2.0,
+                "by_strategy": {
+                    "cost": {},
+                    "realized": {},
+                    "unrealized": {},
+                },
             },
             "wallet": {},
             "paper_trades_by_strategy": {},
@@ -270,8 +278,9 @@ def test_dashboard_uses_daily_pnl_and_expected_labels() -> None:
 
     html = _render_html(stats)
 
-    assert "Expected Profit (Signals)" in html
-    assert "Expected Cost (Signals)" in html
-    assert "Expected ROI (Signals)" in html
+    assert "Realized P&amp;L" in html or "Realized P&L" in html
+    assert "Unrealized P&amp;L" in html or "Unrealized P&L" in html
+    assert "Total P&amp;L" in html or "Total P&L" in html
+    assert "Open Cost Basis" in html
     assert "Daily P&amp;L" in html or "Daily P&L" in html
     assert "$-1.23" in html

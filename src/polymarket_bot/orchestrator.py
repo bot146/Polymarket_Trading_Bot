@@ -96,6 +96,7 @@ class StrategyOrchestrator:
         self._dynamic_initial_order_pct: Decimal | None = None
         self._short_duration_count = 0       # Latest short-duration market count
         self._short_duration_series: dict[str, int] = {}  # Series → count breakdown
+        self._last_market_data: dict[str, Any] = {"markets": [], "resolved_markets": []}  # Expose for paper fills
 
     def _init_strategies(self) -> None:
         """Initialize and register trading strategies."""
@@ -238,7 +239,8 @@ class StrategyOrchestrator:
     def scan_and_collect_signals(self) -> list[StrategySignal]:
         """Scan markets and collect signals from all strategies."""
         market_data = self._gather_market_data()
-        
+        self._last_market_data = market_data  # Cache for paper fill updates
+
         # Build a condition_id → end_date lookup from market data so we can
         # inject resolution info into every signal's metadata centrally,
         # regardless of whether individual strategies include it.

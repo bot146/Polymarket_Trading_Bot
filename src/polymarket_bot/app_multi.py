@@ -147,24 +147,21 @@ def print_stats(
         log.info(f"   Resolved Markets: {res_stats['resolved_markets']}")
         log.info(f"   Redeemable Value: ${res_stats['redeemable_value']:.2f}")
 
-    # Profitability (theoretical expected vs actual realized)
+    # Profitability (actual wallet P&L)
     log.info("─" * 70)
     log.info("💰 PROFITABILITY:")
 
-    # Expected (theoretical)
-    if exec_stats['paper_total_cost'] > 0:
-        log.info(f"   Expected (theoretical):")
-        log.info(f"     Profit: ${exec_stats['paper_total_profit']:.4f}")
-        log.info(f"     Cost: ${exec_stats['paper_total_cost']:.2f}")
-        log.info(f"     ROI: {exec_stats['paper_roi']:.2f}%")
-
-    # Actual (realized + unrealized)
+    # Actual (realized + unrealized from positions)
     if "portfolio" in exec_stats:
         portfolio = exec_stats["portfolio"]
-        log.info(f"   Actual (from positions):")
+        wallet_snap = exec_stats.get("wallet", {})
+        wallet_equity = wallet_snap.get("equity", 0)
+        wallet_start = wallet_snap.get("starting_balance", 0)
+        log.info(f"     Wallet: ${wallet_equity:.2f}  (started ${wallet_start:.2f})")
         log.info(f"     Realized P&L: ${portfolio['total_realized_pnl']:.4f}")
         log.info(f"     Unrealized P&L: ${portfolio['total_unrealized_pnl']:.4f}")
         log.info(f"     Total P&L: ${portfolio['total_pnl']:.4f}")
+        log.info(f"     Open Cost Basis: ${portfolio['total_cost_basis']:.2f}")
         if portfolio['total_cost_basis'] > 0:
             log.info(f"     Realized ROI: {portfolio['realized_roi']:.2f}%")
 
@@ -174,16 +171,27 @@ def print_stats(
         log.info(f"   Redeemed: {close_stats['total_redemptions']} positions")
         log.info(f"   Total Realized: ${close_stats['total_realized_pnl']:.4f}")
 
-    # Strategy breakdown
-    if exec_stats.get('paper_trades_by_strategy'):
-        log.info("─" * 70)
-        log.info("📊 STRATEGY BREAKDOWN:")
-        for strategy, data in exec_stats['paper_trades_by_strategy'].items():
-            log.info(
-                f"   {strategy}: {data['count']} trades, "
-                f"expected profit=${data['total_profit']:.4f}, "
-                f"ROI={data['roi']:.2f}%"
-            )
+    # Strategy breakdown (actual realized P&L from positions)
+    if "portfolio" in exec_stats:
+        by_strategy = exec_stats["portfolio"].get("by_strategy", {})
+        strat_realized = by_strategy.get("realized", {})
+        strat_unrealized = by_strategy.get("unrealized", {})
+        strat_cost = by_strategy.get("cost", {})
+        all_strategies = set(list(strat_realized.keys()) + list(strat_unrealized.keys()) + list(strat_cost.keys()))
+        signal_by_strat = exec_stats.get('paper_trades_by_strategy', {})
+        if all_strategies:
+            log.info("─" * 70)
+            log.info("📊 STRATEGY BREAKDOWN (actual P&L):")
+            for strategy in sorted(all_strategies):
+                s_realized = strat_realized.get(strategy, 0)
+                s_unrealized = strat_unrealized.get(strategy, 0)
+                s_total = s_realized + s_unrealized
+                s_trades = signal_by_strat.get(strategy, {}).get('count', 0)
+                log.info(
+                    f"   {strategy}: {s_trades} trades, "
+                    f"realized=${s_realized:.4f}, "
+                    f"total=${s_total:.4f}"
+                )
 
     # Quote churn (paper)
     po = exec_stats.get("paper_orders") or {}
@@ -557,8 +565,23 @@ class BotRunner:
         # Build price_data from live top-of-book feed
         tob_snap = self.orchestrator.get_top_of_book_snapshot()
         price_data: dict[str, _Decimal] = {}
-        bid_map = tob_snap.get("best_bid", {})
-        ask_map = tob_snap.get("best_ask", {})
+        bid_map = dict(tob_snap.get("best_bid", {}))
+        ask_map = dict(tob_snap.get("best_ask", {}))
+
+        # Backfill with Gamma prices for tokens not on the WSS feed
+        # (e.g. short-duration markets).
+        last_md = getattr(self.orchestrator, "_last_market_data", {})
+        for market in last_md.get("markets", []):
+            for token in market.get("tokens", []):
+                tid = token.get("token_id", "")
+                if not tid:
+                    continue
+                gamma_price = token.get("price")
+                if tid not in ask_map and gamma_price is not None:
+                    ask_map[tid] = gamma_price
+                if tid not in bid_map and gamma_price is not None:
+                    bid_map[tid] = gamma_price
+
         for tid in set(bid_map.keys()) | set(ask_map.keys()):
             bid_v = bid_map.get(tid)
             ask_v = ask_map.get(tid)
@@ -671,17 +694,53 @@ class BotRunner:
         self.executor.set_wallet_snapshot(self.last_wallet_snapshot)
 
     def _advance_paper_fills(self) -> None:
-        """Feed latest top-of-book prices into the paper fill simulator."""
-        tob = self.orchestrator.get_top_of_book_snapshot()
-        best_bid_map = tob.get("best_bid", {})
-        best_ask_map = dict(tob.get("best_ask", {}))
+        """Feed latest top-of-book prices into the paper fill simulator.
 
+        Sources (in priority order):
+        1. CLOB order-book cache (most accurate for execution)
+        2. WSS real-time feed (best_bid / best_ask)
+        3. Gamma API prices from the last scan (covers short-duration
+           markets whose tokens are NOT subscribed to the WSS feed)
+        """
+        tob = self.orchestrator.get_top_of_book_snapshot()
+        best_bid_map: dict[str, float] = dict(tob.get("best_bid", {}))
+        best_ask_map: dict[str, float] = dict(tob.get("best_ask", {}))
+
+        # Layer in CLOB cache (overwrites WSS for negRisk tokens).
         clob_cache = getattr(self.orchestrator, "_clob_cache", {})
         for tid, price in clob_cache.items():
             if price is not None:
                 best_ask_map[tid] = price
 
+        # Layer in Gamma prices for tokens NOT already covered by WSS/CLOB.
+        # This is critical for short-duration markets, which are not subscribed
+        # to the websocket feed.  Without this, their GTC maker orders never
+        # receive a market update and therefore never fill.
+        #
+        # We use the Gamma mid-price for *both* bid and ask because these
+        # tokens lack real order-book data.  The mid-price fluctuates every
+        # scan cycle, so when it dips the fill naturally triggers.
+        last_md = getattr(self.orchestrator, "_last_market_data", {})
+        for market in last_md.get("markets", []):
+            for token in market.get("tokens", []):
+                tid = token.get("token_id", "")
+                if not tid:
+                    continue
+                # Only backfill — don't overwrite higher-fidelity sources.
+                gamma_price = token.get("price")
+                if tid not in best_ask_map:
+                    ask = token.get("best_ask") or gamma_price
+                    if ask is not None:
+                        best_ask_map[tid] = float(ask)
+                if tid not in best_bid_map:
+                    # Use Gamma mid-price as bid estimate so GTC BUY orders
+                    # can fill when the price equals their limit.
+                    bid = token.get("best_bid") or gamma_price
+                    if bid is not None:
+                        best_bid_map[tid] = float(bid)
+
         if best_bid_map or best_ask_map:
+            full_ask_map = {k: _Decimal(str(v)) for k, v in best_ask_map.items() if v is not None}
             token_ids = set(best_bid_map.keys()) | set(best_ask_map.keys())
             for token_id in token_ids:
                 bid = best_bid_map.get(token_id)
@@ -690,8 +749,27 @@ class BotRunner:
                     token_id=token_id,
                     best_bid=_Decimal(str(bid)) if bid is not None else None,
                     best_ask=_Decimal(str(ask)) if ask is not None else None,
-                    best_ask_by_token={k: _Decimal(str(v)) for k, v in best_ask_map.items() if v is not None},
+                    best_ask_by_token=full_ask_map,
                 )
+
+        # ── Reconcile active_positions with real state ──────────────
+        # GTC orders that were canceled (stale) should free their
+        # condition_id slots so new signals can be accepted.
+        open_pos_cids = {p.condition_id for p in self.position_manager.get_open_positions()}
+        open_gtc_cids = set()
+        for o in self.executor.paper_blotter.iter_open_orders():
+            if o.condition_id:
+                open_gtc_cids.add(o.condition_id)
+        actual_active = open_pos_cids | open_gtc_cids
+        # Rebuild the list preserving stacking (count per condition_id).
+        new_active: list[str] = []
+        for cid in actual_active:
+            # Keep as many entries as the max of positions + open GTC orders.
+            pos_count = sum(1 for p in self.position_manager.get_open_positions() if p.condition_id == cid)
+            gtc_count = sum(1 for o in self.executor.paper_blotter.iter_open_orders() if o.condition_id == cid)
+            for _ in range(max(pos_count, gtc_count)):
+                new_active.append(cid)
+        self.orchestrator.active_positions = new_active
 
     def _execute_signals(self, signals: list) -> None:
         enabled_by_name = {s.name: s for s in self.orchestrator.registry.get_enabled()}

@@ -296,6 +296,14 @@ class ShortDurationStrategy(Strategy):
         if market_price <= 0 or market_price >= Decimal("1"):
             return None
 
+        # Reject penny-priced outcomes — the market strongly disagrees with
+        # our momentum model.  E.g. price $0.02 means 2% implied probability
+        # vs our 55%; the market is almost certainly right and the huge
+        # apparent edge is illusory.  Also prevents runaway position sizing
+        # (qty = max_order / 0.005 = 1000 shares).
+        if market_price < Decimal("0.15"):
+            return None
+
         # 9. Edge calculation (maker vs taker)
         if self.config.prefer_maker:
             fee_rate = self.config.maker_fee_rate
@@ -333,12 +341,12 @@ class ShortDurationStrategy(Strategy):
         # 12. Urgency: closer to resolution → more urgent
         urgency = self._compute_urgency(hours_to_end)
 
-        # For maker orders, place limit at the current best ask (or slightly below)
-        # to get queue priority. For taker, just hit the ask.
+        # For maker orders, place limit AT the current market price.
+        # In paper mode, Gamma mid-prices are the only data source and don't
+        # fluctuate sub-cent, so an offset below ask prevents any fills.
+        # In live mode, an order at the ask still rests as a maker order
+        # (someone must sell into it) and earns the 0.5% maker rebate.
         limit_price = market_price
-        if self.config.prefer_maker and market_price > Decimal("0.01"):
-            # Place limit 1 tick below ask to get maker rebate
-            limit_price = market_price - Decimal("0.01")
 
         log.info(
             "⚡ SHORT-DUR: %s %s cid=%s price=%.3f prob=%.1f%% edge=%.1f¢ "

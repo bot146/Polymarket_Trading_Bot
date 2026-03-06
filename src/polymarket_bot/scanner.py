@@ -310,21 +310,34 @@ class MarketScanner:
         so the normal volume-based scan misses them entirely.  We identify them
         by series slug, question pattern, or fee-type metadata.
 
+        Uses ``endDate`` ascending with ``end_date_min=now`` so that the
+        soonest-resolving active markets are returned first.  The previous
+        ``createdAt desc`` approach returned the *newest* markets (typically
+        22-48 h from resolution), causing the short-duration strategy's 2-hour
+        resolution window to filter out every single result.
+
         Args:
             min_liquidity: Minimum liquidity in USDC (replaces volume filter).
-            limit: Maximum markets to fetch from API (sorted by createdAt desc).
+            limit: Maximum markets to fetch from API.
 
         Returns:
             List of short-duration ``MarketInfo`` objects.
         """
         try:
-            # Fetch newest markets by creation time — these often have $0 volume
+            from datetime import datetime, timezone
+
+            # Fetch soonest-resolving active markets.
+            # ``end_date_min`` excludes already-resolved markets whose
+            # ``endDate`` is in the past, so every returned market is still
+            # in-play and sorted by how soon it ends.
+            now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             params: dict[str, Any] = {
                 "limit": limit,
                 "active": True,
                 "closed": False,
-                "order": "createdAt",
-                "ascending": False,
+                "order": "endDate",
+                "ascending": True,
+                "end_date_min": now_iso,
             }
             response = self._get("/markets", params=params)
             if not isinstance(response, list):

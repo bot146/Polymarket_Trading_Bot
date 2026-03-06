@@ -330,8 +330,8 @@ class TestEdgeCalculation:
         assert len(signals) == 1
         assert signals[0].trades[0].order_type == "FOK"
 
-    def test_maker_limit_price_one_tick_below_ask(self):
-        """Maker orders place limit at best_ask - $0.01."""
+    def test_maker_limit_price_at_market(self):
+        """Maker orders place limit at market price (no offset)."""
         snap = _make_snapshot(momentum=0.5, trend=0.9, prob=0.57)
         cfg = ShortDurationConfig(prefer_maker=True)
         strat = _make_strategy({"btc": snap}, config=cfg)
@@ -340,8 +340,8 @@ class TestEdgeCalculation:
         # best_ask = 0.51
         signals = strat.scan({"markets": [market]})
         assert len(signals) == 1
-        # market_price = best_ask (0.51), limit = 0.51 - 0.01 = 0.50
-        assert signals[0].trades[0].price == Decimal("0.50")
+        # market_price = best_ask (0.51), limit = 0.51 (at market)
+        assert signals[0].trades[0].price == Decimal("0.51")
 
 
 # ── Confidence & urgency tests ───────────────────────────────────────

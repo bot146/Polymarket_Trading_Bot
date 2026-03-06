@@ -249,6 +249,7 @@ class UnifiedExecutor:
                 size=trade.size,
                 order_type=trade.order_type,
                 condition_id=str(condition_id) if condition_id else None,
+                strategy=strategy_type,
             )
             self.paper_orders_placed += 1
             order_ids.append(paper_order.order_id)
@@ -303,20 +304,14 @@ class UnifiedExecutor:
                 f"token={trade.token_id[:8]}... type={trade.order_type}"
             )
         
-        # Show running total (theoretical)
-        roi = (self.paper_total_profit / self.paper_total_cost * 100) if self.paper_total_cost > 0 else Decimal("0")
-        log.info(
-            f"  💰 Expected Profit Total: profit=${self.paper_total_profit:.4f} "
-            f"cost=${self.paper_total_cost:.2f} ROI={roi:.2f}% (theoretical)"
-        )
-        
-        # Show actual portfolio P&L if position manager available
+        # Show actual portfolio P&L
         if self.position_manager:
             portfolio_stats = self.position_manager.get_portfolio_stats()
             log.info(
-                f"  💼 Actual Portfolio: realized=${portfolio_stats['total_realized_pnl']:.4f} "
+                f"  💼 Portfolio: wallet=${float(self._equity_cap or 0):.2f} "
+                f"realized=${portfolio_stats['total_realized_pnl']:.4f} "
                 f"unrealized=${portfolio_stats['total_unrealized_pnl']:.4f} "
-                f"total=${portfolio_stats['total_pnl']:.4f}"
+                f"open_cost=${portfolio_stats['total_cost_basis']:.2f}"
             )
         
         return ExecutionResult(
@@ -589,11 +584,14 @@ class UnifiedExecutor:
             metadata = dict(signal.opportunity.metadata)
         else:
             # Maker fills (GTC) are applied on later market updates without the
-            # original signal object. Recover condition_id from the blotter
-            # order so resolution monitoring can match these positions.
+            # original signal object. Recover condition_id and strategy from
+            # the blotter order so resolution monitoring can match these positions.
             paper_order = self.paper_blotter.get(fill.order_id)
-            if paper_order and paper_order.condition_id:
-                condition_id = str(paper_order.condition_id)
+            if paper_order:
+                if paper_order.condition_id:
+                    condition_id = str(paper_order.condition_id)
+                if paper_order.strategy:
+                    strategy_type = str(paper_order.strategy)
 
         # Determine outcome.
         outcome = metadata.get("outcome", "UNKNOWN")

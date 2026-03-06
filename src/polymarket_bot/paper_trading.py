@@ -62,6 +62,7 @@ class PaperOrder:
     size: Decimal
     order_type: str  # FOK|IOC|GTC
     condition_id: str | None = None
+    strategy: str | None = None
     filled_size: Decimal = Decimal("0")
     status: PaperOrderStatus = PaperOrderStatus.OPEN
     created_ts: float = 0.0
@@ -112,6 +113,7 @@ class PaperBlotter:
         size: Decimal,
         order_type: str,
         condition_id: str | None = None,
+        strategy: str | None = None,
     ) -> PaperOrder:
         order_id = f"paper_{self._next_id}"
         self._next_id += 1
@@ -123,6 +125,7 @@ class PaperBlotter:
             size=size,
             order_type=order_type,
             condition_id=condition_id,
+            strategy=strategy,
             created_ts=time.time(),
         )
         self._orders[order_id] = order
